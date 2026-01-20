@@ -1,0 +1,129 @@
+.marketWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.marketRow {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.marketSearch {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.marketInput {
+  width: 100%;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.marketInput:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
+}
+
+.marketHint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.marketResults {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  overflow: hidden;
+  background: white;
+}
+
+.marketResultItem {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.marketResultItem:hover {
+  background: #f3f4f6;
+}
+
+.marketResultMeta {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.marketSelected {
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.marketSmallBtn {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: white;
+  cursor: pointer;
+}
+
+.marketSmallBtn:hover {
+  background: #f3f4f6;
+}
+
+.marketResultsPanel {
+  margin-top: 18px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px;
+  background: #fff;
+}
+
+.marketResultsTitle {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.marketResultsEmpty {
+  font-size: 14px;
+  opacity: 0.7;
+}
+
+.marketResultsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.marketResultRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #f1f5f9;
+  border-radius: 12px;
+  background: #f9fafb;
+}
+
+.marketResultUser {
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.marketResultSwap {
+  flex: 1;
+  font-size: 14px;
+}

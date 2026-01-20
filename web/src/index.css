@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Full height layout */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+/* Soccer theme variables */
+:root {
+  --color-pitch: #1e5631;
+  --color-line: #f5f5f5;
+  --color-highlight: #ffd700;
+}
+
+/* SINGLE source of truth for body */
+body {
+  @apply font-sans;
+  background-color: var(--color-pitch);
+  color: var(--color-line);
+}
+
+/* Buttons */
+button {
+  border-radius: 8px;
+  border: 1px solid #646cff;
+  padding: 0.6em 1.2em;
+  font-weight: 600;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+}
+button:hover {
+  background: #3a3a3a;
+}
+
+/* Card styling */
+.card {
+  @apply rounded-2xl shadow-lg border border-white/20 bg-white/10 backdrop-blur-md;
+}
+
+/* Shadcn UI tokens ONLY (no body styles here) */
+@layer base {
+  :root {
+    --background: 120 20% 15%;
+    --foreground: 0 0% 98%;
+    --card: 120 20% 18%;
+    --card-foreground: 0 0% 98%;
+    --popover: 120 20% 18%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 120 20% 10%;
+    --secondary: 120 10% 25%;
+    --secondary-foreground: 0 0% 98%;
+    --border: 120 10% 30%;
+    --input: 120 10% 30%;
+    --ring: 120 40% 40%;
+    --radius: 0.5rem;
+  }
+}
