@@ -16,6 +16,7 @@ import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { Pencil } from "lucide-react";
 
 const DEFAULT_DRAFT_PLAN = ["ATT", "ATT", "MID", "MID", "DEF", "DEF", "GK", "SUB", "SUB"];
+const STARTING_CAP = 9;   
 
 function displayNameOf(m) {
   return m?.displayName || m?.uid || "User";
@@ -34,14 +35,23 @@ export default function DraftSummary() {
   //Use team name
   const teamNamesByUid = useTeamNames(roomId);
   const myUid = auth.currentUser?.uid;
-
-  //Trade: user to user
+ //Trade: user to user
   const [room, setRoom] = useState(null);
   const [picks, setPicks] = useState([]);
   const tradeRoomPath = room?.code && room.code !== roomId ? room.code : roomId;
   const [sortMode, setSortMode] = useState("order"); // 'order' | 'alpha'
 
+  useEffect(() => {
+    if (!tradeRoomPath || !myUid) return;
 
+    setDoc(
+      doc(db, "rooms", tradeRoomPath, "members", myUid),
+      { uid: myUid, lastSeenAt: serverTimestamp() },
+      { merge: true }
+    ).catch((e) => console.error("members mirror write failed:", e.code, e.message));
+  }, [tradeRoomPath, myUid]);
+
+ 
   // Persist last used room id for convenience
   useEffect(() => {
     if (roomId) localStorage.setItem("lastRoomId", roomId);
@@ -256,6 +266,8 @@ export default function DraftSummary() {
             photoURL={profileOf(manager.uid).photoURL || ""}
             teamName={teamNamesByUid[manager.uid] || ""}
             roomId={roomId}
+            room={room}
+            roomPath={tradeRoomPath}
             myUid={myUid}
           />
         ))}
@@ -281,21 +293,37 @@ export default function DraftSummary() {
   );
 }
 
-function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, roomId, myUid }) {
-  // Group by position for quick visual
-  const byPos = useMemo(() => {
-    const map = { ATT: [], MID: [], DEF: [], GK: [], SUB: [] };
-    for (const p of picks) {
-      const key = p.position && ["ATT", "MID", "DEF", "GK"].includes(p.position) ? p.position : "SUB";
-      map[key].push(p);
-    }
-    return map;
-  }, [picks]);
-
+function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, roomId, myUid, room, roomPath }) {
   const name = displayNameOf(manager);
   const showTeamName = teamName?.trim();
   const title = showTeamName ? `${name} — ${showTeamName}` : name;
+
   const isMe = myUid && manager.uid === myUid;
+
+  // Ensure the "members mirror" doc exists so Firestore rules (isRoomMember) passes.
+  useEffect(() => {
+    if (!isMe || !myUid || !roomPath) return;
+
+    setDoc(
+      doc(db, "rooms", roomPath, "members", myUid),
+      {
+        uid: myUid,
+        displayName: displayNameOf(manager),
+        lastSeenAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }, [isMe, myUid, roomPath, manager]);
+
+
+
+  // Lock editing when games are live (UI-only for now)
+  const lineupLocked =
+    room?.gamesLive === true ||           // 👈 add this (your "game in progress" flag)
+    !!room?.lineupsLocked ||              // keep if you still want to use it later
+    (room?.lineupLockAt && Date.now() >= Number(room.lineupLockAt));
+
+
   const [editing, setEditing] = useState(false);
   const [input, setInput] = useState(teamName || "");
 
@@ -314,6 +342,135 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
 
     setEditing(false);
   }
+
+  // ---------- LINEUP LOGIC (only for me) ----------
+  const keyOf = (p) => p.playerId || p.id || p.playerName;
+
+  const orderedPicks = useMemo(
+    () => [...(picks || [])].sort((a, b) => (a.turn || 0) - (b.turn || 0)),
+    [picks]
+  );
+
+  const allKeys = useMemo(() => orderedPicks.map(keyOf), [orderedPicks]);
+
+  const [lineupDoc, setLineupDoc] = useState(null);
+  const [pendingIn, setPendingIn] = useState(null); // bench player picked to sub in
+
+  useEffect(() => {
+    if (!roomPath || !manager?.uid) return;
+    const ref = doc(db, "rooms", roomPath, "lineups", manager.uid);
+    return onSnapshot(ref, (snap) => setLineupDoc(snap.exists() ? snap.data() : null));
+  }, [roomPath, manager?.uid]);
+
+  const starters = useMemo(() => {
+    const saved = Array.isArray(lineupDoc?.starters) ? lineupDoc.starters : null;
+    const base = saved && saved.length ? saved : allKeys.slice(0, STARTING_CAP);
+
+    const set = new Set(allKeys);
+    return base.filter((k) => set.has(k)).slice(0, STARTING_CAP);
+  }, [lineupDoc, allKeys]);
+
+  const benchKeys = useMemo(() => {
+    const s = new Set(starters);
+    return allKeys.filter((k) => !s.has(k));
+  }, [allKeys, starters]);
+
+  const pickByKey = useMemo(() => {
+    const m = new Map();
+    for (const p of orderedPicks) m.set(keyOf(p), p);
+    return m;
+  }, [orderedPicks]);
+
+  async function saveStarters(next) {
+    if (!isMe || lineupLocked) return;
+
+    const clean = next.slice(0, STARTING_CAP);
+
+    const membersPath = `rooms/${roomId}/members/${myUid}`;
+    const lineupsPath = `rooms/${roomId}/lineups/${myUid}`;
+
+    try {
+      // 1) Create/refresh member mirror doc
+      await setDoc(
+        doc(db, "rooms", roomPath, "members", myUid),
+        { uid: myUid, lastSeenAt: serverTimestamp() },
+        { merge: true }
+      );
+    } catch (e) {
+      console.error("[saveStarters] ❌ members write denied:", e.code, e.message);
+      throw e;
+    }
+
+    try {
+      // 2) Write lineup doc
+      await setDoc(
+        doc(db, "rooms", roomPath, "lineups", myUid),
+        { uid: myUid, starters: clean, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
+    
+    } catch (e) {
+      console.error("[saveStarters] ❌ lineups write denied:", e.code, e.message);
+      throw e;
+    }
+  }
+
+
+  function onSubInClick(benchKey) {
+    if (!isMe || lineupLocked) return;
+
+    // tap again to cancel
+    if (pendingIn === benchKey) {
+      setPendingIn(null);
+      return;
+    }
+
+    // if there is still space, add immediately
+    if (starters.length < STARTING_CAP) {
+      saveStarters([...starters, benchKey]);
+      setPendingIn(null);
+      return;
+    }
+
+    // otherwise wait for user to pick who to replace
+    setPendingIn(benchKey);
+  }
+
+  function onStarterClick(starterKey) {
+    if (!isMe || lineupLocked) return;
+    if (!pendingIn) return; // user wants flow: pick SUB IN first
+
+    const next = starters.map((k) => (k === starterKey ? pendingIn : k));
+    saveStarters(next);
+    setPendingIn(null);
+  }
+
+  // Starters grouped into the same ATT/MID/DEF/GK layout
+  const startersByPos = useMemo(() => {
+    const map = { ATT: [], MID: [], DEF: [], GK: [] };
+
+    for (const k of starters) {
+      const p = pickByKey.get(k);
+      const pos = p?.position;
+      if (pos && map[pos]) map[pos].push(p);
+    }
+    return map;
+  }, [starters, pickByKey]);
+
+  // For other managers, keep your original grouping by position
+  const byPosOther = useMemo(() => {
+    const map = { ATT: [], MID: [], DEF: [], GK: [], SUB: [] };
+    if (isMe) return map;
+    for (const p of picks) {
+      const key = p.position && ["ATT", "MID", "DEF", "GK"].includes(p.position) ? p.position : "SUB";
+      map[key].push(p);
+    }
+    return map;
+  }, [picks, isMe]);
+
+  const benchPicks = useMemo(() => {
+    return benchKeys.map((k) => pickByKey.get(k)).filter(Boolean);
+  }, [benchKeys, pickByKey]);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
@@ -340,6 +497,7 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
             </button>
           )}
         </div>
+
         {isMe && editing && (
           <div className="mt-2 w-full">
             <input
@@ -350,14 +508,9 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
             />
 
             <div className="mt-2 flex gap-2">
-              <button
-                type="button"
-                className="border rounded px-3 py-1 text-sm"
-                onClick={saveTeamName}
-              >
+              <button type="button" className="border rounded px-3 py-1 text-sm" onClick={saveTeamName}>
                 Save
               </button>
-
               <button
                 type="button"
                 className="border rounded px-3 py-1 text-sm"
@@ -372,38 +525,131 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
           </div>
         )}
       </div>
+
       <div className="text-xs text-gray-500 mb-3">
         Picks: {picks.length} / {totalRounds}
+        {isMe && (
+          <span className="ml-2">
+            • Starters {starters.length}/{STARTING_CAP}
+            {lineupLocked ? " (Locked)" : pendingIn ? " — pick a starter to replace" : ""}
+          </span>
+        )}
       </div>
 
+      {/* Same layout (ATT/MID/DEF/GK) */}
       <div className="grid grid-cols-2 gap-2 text-sm">
-        <PosBlock title="ATT" list={byPos.ATT} />
-        <PosBlock title="MID" list={byPos.MID} />
-        <PosBlock title="DEF" list={byPos.DEF} />
-        <PosBlock title="GK" list={byPos.GK} />
-        <div className="col-span-2">
-          <PosBlock title="SUB" list={byPos.SUB} />
-        </div>
+        {isMe ? (
+          <>
+            <StarterBlock title="ATT" list={startersByPos.ATT} pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="MID" list={startersByPos.MID} pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="DEF" list={startersByPos.DEF} pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="GK"  list={startersByPos.GK}  pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
+
+            {/* SUB section becomes Bench */}
+            <div className="col-span-2">
+              <BenchBlock
+                title="SUB"
+                list={benchPicks}
+                pendingKey={pendingIn}
+                locked={lineupLocked}
+                onSubIn={onSubInClick}
+                keyOf={keyOf}
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            <PosBlock title="ATT" list={startersByPos.ATT} />
+            <PosBlock title="MID" list={startersByPos.MID} />
+            <PosBlock title="DEF" list={startersByPos.DEF} />
+            <PosBlock title="GK"  list={startersByPos.GK} />
+            <div className="col-span-2">
+              <BenchReadOnlyBlock title="SUB" list={benchPicks} />
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Flat list ordered by turn */}
+      {/* Flat list ordered by turn (unchanged) */}
       <div className="mt-3">
         <div className="text-xs text-gray-500 mb-1">All Picks (by draft order)</div>
         <ol className="space-y-1 max-h-48 overflow-auto">
-          {[...picks]
-            .sort((a, b) => (a.turn || 0) - (b.turn || 0))
-            .map((p) => (
-              <li key={p.id || `${p.uid}-${p.turn}`} className="border rounded px-2 py-1 flex items-center justify-between">
-                <span>
-                  <b>#{p.turn}</b> — {p.playerName}{" "}
-                  <span className="opacity-70">({p.position || "SUB"})</span>
-                </span>
-                <span className="opacity-60 text-xs">R{p.round}</span>
-              </li>
-            ))}
+          {orderedPicks.map((p) => (
+            <li key={p.id || `${p.uid}-${p.turn}`} className="border rounded px-2 py-1 flex items-center justify-between">
+              <span>
+                <b>#{p.turn}</b> — {p.playerName} <span className="opacity-70">({p.position || "SUB"})</span>
+              </span>
+              <span className="opacity-60 text-xs">R{p.round}</span>
+            </li>
+          ))}
           {picks.length === 0 && <div className="opacity-60 text-sm">No picks yet.</div>}
         </ol>
       </div>
+    </div>
+  );
+}
+
+function StarterBlock({ title, list, pendingIn, locked, onPick, keyOf }) {
+  return (
+    <div className="border rounded p-2">
+      <div className="text-xs font-semibold mb-1">{title}</div>
+      <ul className="space-y-1">
+        {list.map((p) => {
+          const k = keyOf(p);
+          return (
+            <li
+              key={p.id || `${p.uid}-${p.turn}`}
+              className={`border rounded px-2 py-1 ${
+                locked ? "opacity-60" : pendingIn ? "cursor-pointer hover:bg-slate-50" : ""
+              }`}
+              title={pendingIn && !locked ? "Tap to sub out" : undefined}
+              onClick={() => {
+                if (!locked && pendingIn) onPick(k);
+              }}
+            >
+              {p.playerName}
+            </li>
+          );
+        })}
+        {list.length === 0 && <li className="text-xs text-gray-400">—</li>}
+      </ul>
+    </div>
+  );
+}
+
+function BenchBlock({ title, list, pendingKey, locked, onSubIn, keyOf }) {
+  return (
+    <div className="border rounded p-2">
+      <div className="text-xs font-semibold mb-1">{title} <span className="opacity-60">(Bench)</span></div>
+      <ul className="space-y-1">
+        {list.map((p) => {
+          const k = keyOf(p);
+          const selected = pendingKey === k;
+          return (
+            <li
+              key={p.id || `${p.uid}-${p.turn}`}
+              className={`border rounded px-2 py-1 flex items-center justify-between ${
+                selected ? "bg-amber-50 border-amber-200" : ""
+              } ${locked ? "opacity-60" : ""}`}
+            >
+              <span>
+                {p.playerName} <span className="opacity-60 text-xs">({p.position})</span>
+              </span>
+
+              <button
+                type="button"
+                className={'border rounded px-2 py-1 text-xs ${locked ? "opacity-50 cursor-not-allowed" : ""} '}
+                disabled={locked}
+                title={locked ? "Lineups locked while games are live" : "Move to starting lineup"}
+                onClick={() => onSubIn(k)}
+              >
+                SUB IN
+              </button>
+            </li>
+          );
+        })}
+        {list.length === 0 && <li className="text-xs text-gray-400">—</li>}
+      </ul>
     </div>
   );
 }
@@ -423,3 +669,23 @@ function PosBlock({ title, list }) {
     </div>
   );
 }
+
+function BenchReadOnlyBlock({ title, list }) {
+  return (
+    <div className="border rounded p-2">
+      <div className="text-xs font-semibold mb-1">
+        {title} <span className="opacity-60">(Bench)</span>
+      </div>
+      <ul className="space-y-1">
+        {list.map((p) => (
+          <li key={p.id || `${p.uid}-${p.turn}`} className="border rounded px-2 py-1 flex justify-between">
+            <span>{p.playerName}</span>
+            <span className="opacity-60 text-xs">({p.position})</span>
+          </li>
+        ))}
+        {list.length === 0 && <li className="text-xs text-gray-400">—</li>}
+      </ul>
+    </div>
+  );
+}
+

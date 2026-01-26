@@ -230,7 +230,7 @@ export default function DraftWithPresence() {
       hostUid: user.uid,
       members: initialMembers,           // array on room doc (live-watched)
       turnIndex: 0,
-      totalRounds: 9,                       //Also Change this to stop cap of rounds
+      totalRounds: 11,                       //Also Change this to stop cap of rounds  <--------------------
       draftPlan: null,
       started: false,
       startAt: null,
@@ -243,8 +243,18 @@ export default function DraftWithPresence() {
 
     // Convenience mirror (optional)
     await setDoc(doc(db, "rooms", key, "members", user.uid), {
+      uid: user.uid,
       displayName,
       joinedAt: serverTimestamp(),
+    }, { merge: true });
+
+    await setDoc(doc(db, "users", user.uid, "rooms", key), {
+      roomId: key,
+      code: key,
+      name: "Friends Draft",
+      hostUid: user.uid,
+      joinedAt: serverTimestamp(),
+      lastSeenAt: serverTimestamp(),
     }, { merge: true });
 
     setRoomKeyInput(key);
@@ -267,6 +277,7 @@ export default function DraftWithPresence() {
 
     // Subcollection mirror (optional)
     await setDoc(doc(db, "rooms", key, "members", user.uid), {
+      uid: user.uid,
       displayName,
       joinedAt: serverTimestamp(),
     }, { merge: true });
@@ -277,6 +288,16 @@ export default function DraftWithPresence() {
     if (!arr.find(m => m.uid === user.uid)) {
       await updateDoc(ref, { members: [...arr, { uid: user.uid, displayName }], updatedAt: serverTimestamp() });
     }
+
+    await setDoc(doc(db, "users", user.uid, "rooms", key), {
+      roomId: key,
+      code: data.code || key,
+      name: data.name || "Room",
+      hostUid: data.hostUid || "",
+      joinedAt: serverTimestamp(),
+      lastSeenAt: serverTimestamp(),
+    }, { merge: true });
+
 
     setRoomId(key);
   }
@@ -500,7 +521,7 @@ export default function DraftWithPresence() {
         <div className="text-lg font-semibold mb-2">Create / Join a Room</div>
         <div className="grid gap-3 md:grid-cols-3">
           <div className="flex items-center gap-2">
-            <button onClick={createRoom} className="border px-3 py-2 rounded bg-black text-white">
+            <button onClick={createRoom} className="draftRoomBtn draftRoomBtnPrimary">
               Create Room (Host)
             </button>
             {room?.code && <div className="text-sm">Room Key: <b>{room.code}</b></div>}
@@ -512,22 +533,12 @@ export default function DraftWithPresence() {
               value={roomKeyInput}
               onChange={(e) => setRoomKeyInput(e.target.value.toUpperCase())}
             />
-            <button onClick={joinByCode} className="border px-3 py-2 rounded">Join</button>
+            <button onClick={joinByCode} className="draftRoomBtn draftRoomBtnOutline">Join</button>
           </div>
           <div className="flex items-center gap-2">
             <div className="text-sm opacity-70">
               {roomId ? <>Connected to <b>{roomId}</b></> : "Not connected"}
             </div>
-            <button
-              className="ml-auto px-3 py-2 rounded border"
-              onClick={() => {
-                const last = getLastRoomId();
-                if (!last) return alert("No recent room found");
-                setRoomId(last);
-              }}
-            >
-              Rejoin last room
-            </button>
           </div>
         </div>
       </div>
@@ -860,18 +871,23 @@ export default function DraftWithPresence() {
 // ----- Subcomponents -----
 function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
       <input
         type="datetime-local"
-        className="border px-2 py-1 rounded"
+        className="border px-2 py-2 rounded w-full sm:w-auto"
         value={startLocalISO}
         onChange={(e) => setStartLocalISO(e.target.value)}
       />
-      <button onClick={scheduleStart} className="border px-3 py-1 rounded">Schedule</button>
-      <button onClick={startNow} className="border px-3 py-1 rounded bg-black text-white">Start Now</button>
+      <button onClick={scheduleStart} className="draftRoomBtn draftRoomBtnAmber">
+        Schedule
+      </button>
+      <button onClick={startNow} className="draftRoomBtn draftRoomBtnPrimary">
+        Start Now
+      </button>
     </div>
   );
 }
+
 
 function PlayerPool({ availablePlayers, posFilter, setPosFilter, search, setSearch, onPick, requiredSlot }) {
   return (

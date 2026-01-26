@@ -416,10 +416,9 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
     alert(`Market resolved. Trades: ${res?.resultsCount ?? 0}`);
   }
 
-  
   return (
-    <div className="mt-8 rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
-      <div className="flex items-center justify-between">
+    <div className="marketCard">
+      <div className="marketHeader">
         <h2 className="text-xl font-bold">Marketplace</h2>
         <div className="text-sm">
           {market?.status === "open" ? (
@@ -438,25 +437,55 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
 
       {/* Host controls */}
       {isHost && (
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div className="marketHostGrid">
           <div className="col-span-1">
             <label className="text-xs font-semibold block mb-1">Duration</label>
-            <div className="flex gap-2">
-              <input className="border rounded px-2 py-1 w-20" type="number" min="0" value={dur.days} onChange={e=>setDur({...dur, days:e.target.value})}/> <span className="text-sm self-center">days</span>
-              <input className="border rounded px-2 py-1 w-20" type="number" min="0" value={dur.hours} onChange={e=>setDur({...dur, hours:e.target.value})}/> <span className="text-sm self-center">hrs</span>
-              <input className="border rounded px-2 py-1 w-20" type="number" min="0" value={dur.minutes} onChange={e=>setDur({...dur, minutes:e.target.value})}/> <span className="text-sm self-center">min</span>
+            <div className="marketDurationRow">
+              <div className="marketDurationItem">
+                <input
+                  className="marketNum"
+                  type="number"
+                  min="0"
+                  value={dur.days}
+                  onChange={(e) => setDur({ ...dur, days: e.target.value })}
+                />
+                <span className="marketUnit">days</span>
+              </div>
+
+              <div className="marketDurationItem">
+                <input
+                  className="marketNum"
+                  type="number"
+                  min="0"
+                  value={dur.hours}
+                  onChange={(e) => setDur({ ...dur, hours: e.target.value })}
+                />
+                <span className="marketUnit">hrs</span>
+              </div>
+
+              <div className="marketDurationItem">
+                <input
+                  className="marketNum"
+                  type="number"
+                  min="0"
+                  value={dur.minutes}
+                  onChange={(e) => setDur({ ...dur, minutes: e.target.value })}
+                />
+                <span className="marketUnit">min</span>
+              </div>
             </div>
+
           </div>
           <div className="col-span-1">
             <label className="text-xs font-semibold block mb-1">Schedule start</label>
             <input className="border rounded px-2 py-1 w-full" type="datetime-local" value={startISO} onChange={e=>setStartISO(e.target.value)} />
-            <button className="mt-2 px-3 py-1 rounded bg-amber-600 text-white" onClick={onSchedule}>Schedule</button>
           </div>
-          <div className="col-span-1 flex items-end">
-            <button className="px-3 py-2 rounded bg-green-600 text-white" onClick={onStartNow}>Open Now</button>
+          <div className="marketHostActions">
+            <button className="marketBtn marketBtnAmber" onClick={onSchedule}>Schedule</button>
+            {/*<button className="marketBtn marketBtnGreen" onClick={onStartNow}>Open Now</button>
             {market?.status !== "resolved" ? (
-              <button className="ml-2 px-3 py-2 rounded bg-blue-600 text-white" onClick={onResolve}>Resolve Now</button>
-            ) : null}
+              <button className="marketBtn marketBtnBlue" onClick={onResolve}>Resolve Now</button>
+            ) : null} */}
           </div>
         </div>
       )}
@@ -492,7 +521,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
             {label:"Choice B", state: choiceB, set: setChoiceB}].map(({label, state, set}) => (
             <div key={label} className="border rounded p-3">
               <div className="text-sm font-medium mb-2">{label}</div>
-              <div className="flex gap-2 items-center">
+              <div className="marketChoiceRow">
                 <AcquireSearch
                   label={label}
                   search={label === "Choice A" ? searchA : searchB}
@@ -503,7 +532,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
                   pickedSet={pickedSet}
                   disabled={!isEditing}
                 />
-                <span className="text-xs opacity-60">for</span>
+                <span className="marketChoiceFor">for</span>
                 <select disabled={!isEditing} className="border rounded px-2 py-1 w-full" value={state.swapOutId} onChange={e=>set({...state, swapOutId:e.target.value})}>
                   <option value="">— Select your player to release —</option>
                   {myRoster.map(p => <option key={p.playerId} value={p.playerId}>{p.playerName} ({p.position})</option>)}
@@ -512,15 +541,25 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
             </div>
           ))}
         </div>
-        <button className="mt-3 px-4 py-2 rounded bg-slate-900 text-white" onClick={onSaveInterest} disabled={!market || market.status!=="open" || !isEditing}>Save Interest</button>
-        <button
-          className="px-4 py-2 rounded border disabled:opacity-50"
-          onClick={() => setIsEditing(true)}
-          disabled={!market || market.status !== "open"}
-        >
-          Edit choices
-        </button>
-        
+        <div className="marketInterestActions">
+          <button
+            className="marketBtn marketBtnDark"
+            onClick={onSaveInterest}
+            disabled={!market || market.status !== "open" || !isEditing}
+            type="button"
+          >
+            Save Interest
+          </button>
+
+          <button
+            className="marketBtn marketBtnOutline"
+            onClick={() => setIsEditing(true)}
+            disabled={!market || market.status !== "open"}
+            type="button"
+          >
+            Edit choices
+          </button>
+        </div>
         {market?.status !== "open" && <div className="text-xs opacity-60 mt-1">Interest can be saved only while market is open.</div>}
         <div className="mt-2 text-sm min-h-[20px]">
           {saveStatus === "saving" && (

@@ -2,48 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Full height layout */
-html, body, #root {
-  height: 100%;
-  margin: 0;
-}
-
-/* Soccer theme variables */
-:root {
-  --color-pitch: #1e5631;
-  --color-line: #f5f5f5;
-  --color-highlight: #ffd700;
-}
-
-/* SINGLE source of truth for body */
-body {
-  @apply font-sans;
-  background-color: var(--color-pitch);
-  color: var(--color-line);
-}
-
-/* Buttons */
-button {
-  border-radius: 8px;
-  border: 1px solid #646cff;
-  padding: 0.6em 1.2em;
-  font-weight: 600;
-  background: #1a1a1a;
-  color: #fff;
-  cursor: pointer;
-}
-button:hover {
-  background: #3a3a3a;
-}
-
-/* Card styling */
-.card {
-  @apply rounded-2xl shadow-lg border border-white/20 bg-white/10 backdrop-blur-md;
-}
-
-/* Shadcn UI tokens ONLY (no body styles here) */
+/* ---------- Global, mobile-friendly defaults ---------- */
 @layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { 
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  /* Full height layout */
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  /* Soccer theme variables */
   :root {
+    --color-pitch: #1e5631;
+    --color-line: #f5f5f5;
+    --color-highlight: #ffd700;
+
+    /* Shadcn UI tokens */
     --background: 120 20% 15%;
     --foreground: 0 0% 98%;
     --card: 120 20% 18%;
@@ -59,4 +39,62 @@ button:hover {
     --ring: 120 40% 40%;
     --radius: 0.5rem;
   }
+
+  /* SINGLE source of truth for body */
+  body {
+    @apply font-sans;
+    min-height: 100dvh;
+    background-color: var(--color-pitch);
+    color: var(--color-line);
+    overflow-x: hidden; /* prevents side-scroll on mobile */
+  }
+
+  img, svg, video, canvas {
+    max-width: 100%;
+    height: auto;
+  }
+
+  input, select, textarea, button {
+    font: inherit;
+  }
 }
+
+/* ---------- Layout helpers (use anywhere) ---------- */
+.container {
+  width: min(100% - 2rem, 1100px);
+  margin-inline: auto;
+}
+
+.section {
+  padding-inline: 1rem;
+}
+
+/* Card styling */
+.card {
+  @apply rounded-2xl shadow-lg border border-white/20 bg-white/10 backdrop-blur-md;
+}
+
+/* ---------- IMPORTANT: stop global button styling from wrecking mobile ---------- */
+/* Your current global button rule makes buttons huge and can fight Tailwind/shadcn.
+   Keep buttons neutral globally, style via classes/components instead. */
+button {
+  border-radius: 0.75rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* If you still want a default “plain button look”, keep it SMALL and mobile-safe */
+button:not([class]) {
+  border: 1px solid rgba(255,255,255,0.25);
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+  background: rgba(0,0,0,0.35);
+  color: #fff;
+}
+
+/* Mobile tweaks */
+@media (max-width: 768px) {
+  .container { width: min(100% - 1.25rem, 1100px); }
+}
+
+

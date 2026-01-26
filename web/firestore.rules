@@ -1,0 +1,147 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* Helpers */
+    function authed() { return request.auth != null; }
+    function roomDoc(roomId) { return get(/databases/$(database)/documents/rooms/$(roomId)); }
+    function isHostUid(roomId) {
+      return authed() && roomDoc(roomId).data.hostUid == request.auth.uid;
+    }
+    function changedOnly(keys) {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(keys);
+    }
+    function isRoomMember(roomId) {
+      return authed() &&
+        exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
+    }
+
+
+    /* users */
+    match /users/{uid} {
+      allow read: if authed();
+      allow create, update: if authed() && uid == request.auth.uid;
+      allow delete: if false;
+    }
+    match /users/{uid}/rooms/{roomId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    /*user changing team name*/
+    match /rooms/{roomId}/teamNames/{uid} {
+      allow read: if authed(); // ideally also check user is in room
+      allow create, update: if authed() && request.auth.uid == uid;
+      allow delete: if false;
+    }
+    match /rooms/{roomId}/lineups/{uid} {
+   	 	allow read: if isRoomMember(roomId);
+
+      allow create, update: if isRoomMember(roomId)
+        && request.auth.uid == uid
+        && roomDoc(roomId).data.lineupsLocked != true;
+
+      allow delete: if false;
+ 		}
+
+
+
+    /* rooms + subcollections */
+    match /rooms/{roomId} {
+      allow read: if authed();
+      allow create: if authed() && request.resource.data.hostUid == request.auth.uid;
+
+      // Host can update anything.
+      // Non-hosts can:
+      //  - Join/leave: change only 'members' (+ updatedAt)
+      //  - Make a pick: change only 'turnIndex' & 'turnDeadlineAt' (+ updatedAt)
+      // Host-only can:
+      //  - Update market field on the room doc: change only 'market' (+ updatedAt)
+      allow update: if authed() && (
+        isHostUid(roomId) ||
+        changedOnly(['members','updatedAt']) ||
+        changedOnly(['turnIndex','turnDeadlineAt','updatedAt']) ||
+        (isHostUid(roomId) && changedOnly(['name', 'updatedAt'])) ||
+        (isHostUid(roomId) && changedOnly(['market','updatedAt']))
+      );
+
+      allow delete: if false;
+
+      // ✅ market doc (Marketplace.jsx reads: rooms/{roomId}/market/current)
+      match /market/{docId} {
+        allow read: if authed();
+        // choose one:
+
+        // Option A (common): only host can write from client
+        allow create, update, delete: if authed() && isHostUid(roomId);
+
+        // Option B (stricter): ONLY Cloud Functions (Admin SDK) can write
+        // allow create, update, delete: if false;
+      }
+
+      // presence mirror (optional)
+      match /members/{uid} {
+        allow read: if authed();
+        allow create, update, delete: if authed() && uid == request.auth.uid;
+      }
+
+      // players pool — host writes, all read
+      match /players/{playerId} {
+        allow read: if authed();
+        allow create, update, delete: if authed() && isHostUid(roomId);
+      }
+
+      // picks — allow any signed-in user to create (your app logic enforces whose turn it is)
+      // host may update/delete (resolve/rollback + apply trades)
+      match /picks/{pickId} {
+        allow read: if authed();
+        allow create: if authed();
+        allow update, delete: if authed() && isHostUid(roomId);
+      }
+
+      // market interest — per-user doc
+      match /marketInterest/{uid} {
+        allow read, create, update, delete: if authed() && request.auth.uid == uid;
+      }
+
+      // market results — host writes, all read
+      match /marketResults/{id} {
+        allow read: if authed();
+        allow create, update, delete: if authed() && isHostUid(roomId);
+      }
+
+      // trades — user-to-user offers, host applies
+      match /trades/{tradeId} {
+        allow read: if authed();
+
+        // sender creates offer
+        allow create: if authed() && request.auth.uid == request.resource.data.fromUid;
+
+        // update:
+        // - sender can cancel pending
+        // - recipient can accept/reject pending
+        // - host can complete (apply) accepted trades
+        allow update: if authed() && (
+          isHostUid(roomId) ||
+          (
+            request.auth.uid == resource.data.fromUid &&
+            resource.data.status == "pending" &&
+            request.resource.data.status == "canceled"
+          ) ||
+          (
+            request.auth.uid == resource.data.toUid &&
+            resource.data.status == "pending" &&
+            (
+              request.resource.data.status == "accepted" ||
+              request.resource.data.status == "rejected"
+            )
+          )
+        );
+
+        allow delete: if false;
+      }
+    }
+  }
+}
+
+
+

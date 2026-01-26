@@ -25,9 +25,9 @@ import {
 import TournamentPage from "./pages/TournamentPage/TournamentPage";
 import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
 
-
 function Nav({ user, displayName, photoURL }) {
   const [lastRoomId, setLastRoomIdState] = useState(() => getLastRoomId());
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const refresh = () => setLastRoomIdState(getLastRoomId());
@@ -36,7 +36,14 @@ function Nav({ user, displayName, photoURL }) {
     return () => {
       window.removeEventListener("lastRoomIdChanged", refresh);
       window.removeEventListener("storage", refresh);
-    }
+    };
+  }, []);
+
+  // close mobile menu on route change (basic)
+  useEffect(() => {
+    const close = () => setOpen(false);
+    window.addEventListener("popstate", close);
+    return () => window.removeEventListener("popstate", close);
   }, []);
 
   const tabs = [
@@ -58,38 +65,45 @@ function Nav({ user, displayName, photoURL }) {
     { to: "/signin", label: "Sign In", hideWhenAuthed: true },
   ];
 
+  const visibleTabs = tabs.filter(
+    (t) => !(t.hideWhenAuthed && user) && !(t.hideWhenNoUser && !user)
+  );
+
   return (
-    <div className="sticky top-0 bg-white/90 backdrop-blur border-b border-gray-200 shadow-sm z-50">
-      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-        <Link to="/" className="font-bold text-lg">⚽ Football Fantasy</Link>
+    <header className="sticky top-0 z-50 bg-white/90 backdrop-blur border-b border-gray-200">
+      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+        <Link to="/" className="font-bold text-lg whitespace-nowrap">
+          ⚽ Football Fantasy
+        </Link>
 
-        <nav className="flex items-center gap-4 text-sm">
-          {tabs
-            .filter(t => !(t.hideWhenAuthed && user) && !(t.hideWhenNoUser && !user))
-            .map(t => {
-              if (t.disabled || !t.to) {
-                return (
-                  <span key={t.label} className="opacity-50 cursor-not-allowed">
-                    {t.label}
-                  </span>
-                );
-              }
-
+        {/* Desktop nav */}
+        <nav className="hidden md:flex items-center gap-4 text-sm">
+          {visibleTabs.map((t) => {
+            if (t.disabled || !t.to) {
               return (
-                <NavLink
-                  key={t.to}
-                  to={t.to}
-                  className={({ isActive }) =>
-                    isActive ? "font-semibold text-blue-600" : "opacity-70 hover:opacity-100"
-                  }
-                >
+                <span key={t.label} className="opacity-50 cursor-not-allowed">
                   {t.label}
-                </NavLink>
+                </span>
               );
-            })}
+            }
+            return (
+              <NavLink
+                key={t.to}
+                to={t.to}
+                className={({ isActive }) =>
+                  isActive
+                    ? "font-semibold text-blue-600"
+                    : "opacity-70 hover:opacity-100"
+                }
+              >
+                {t.label}
+              </NavLink>
+            );
+          })}
         </nav>
 
-        <div className="flex items-center gap-3">
+        {/* Right side (desktop) */}
+        <div className="hidden md:flex items-center gap-3">
           {user ? (
             <>
               <div className="flex items-center gap-2">
@@ -99,9 +113,9 @@ function Nav({ user, displayName, photoURL }) {
                     {(displayName || user.email || "?").slice(0, 2).toUpperCase()}
                   </AvatarFallback>
                 </Avatar>
-
                 <span className="text-sm opacity-80">{displayName || user.email}</span>
               </div>
+
               <button
                 onClick={signOutNow}
                 className="px-3 py-1 rounded-lg border bg-red-500 text-white hover:bg-red-600"
@@ -118,10 +132,83 @@ function Nav({ user, displayName, photoURL }) {
             </NavLink>
           )}
         </div>
+
+        {/* Mobile menu button */}
+        <button
+          className="md:hidden px-3 py-2 rounded-lg border bg-white"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-label="Toggle menu"
+        >
+          ☰
+        </button>
       </div>
-    </div>
+
+      {/* Mobile dropdown */}
+      {open && (
+        <div className="md:hidden border-t border-gray-200 bg-white">
+          <div className="px-4 py-3 flex flex-col gap-3">
+            {user && (
+              <div className="flex items-center gap-2">
+                <Avatar className="h-8 w-8">
+                  <AvatarImage src={photoURL || ""} alt="Profile picture" />
+                  <AvatarFallback>
+                    {(displayName || user.email || "?").slice(0, 2).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="text-sm opacity-80">{displayName || user.email}</span>
+              </div>
+            )}
+
+            <nav className="flex flex-col gap-2">
+              {visibleTabs.map((t) => {
+                if (t.disabled || !t.to) {
+                  return (
+                    <span key={t.label} className="opacity-50 cursor-not-allowed">
+                      {t.label}
+                    </span>
+                  );
+                }
+                return (
+                  <NavLink
+                    key={t.to}
+                    to={t.to}
+                    onClick={() => setOpen(false)}
+                    className={({ isActive }) =>
+                      isActive
+                        ? "font-semibold text-blue-600"
+                        : "opacity-80"
+                    }
+                  >
+                    {t.label}
+                  </NavLink>
+                );
+              })}
+            </nav>
+
+            {user ? (
+              <button
+                onClick={signOutNow}
+                className="w-full px-3 py-2 rounded-lg border bg-red-500 text-white hover:bg-red-600"
+              >
+                Sign out
+              </button>
+            ) : (
+              <NavLink
+                to="/signin"
+                onClick={() => setOpen(false)}
+                className="w-full text-center px-3 py-2 rounded-lg border bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Sign In
+              </NavLink>
+            )}
+          </div>
+        </div>
+      )}
+    </header>
   );
 }
+
 
 function RequireAuth({ user, children }) {
   if (!user) return <Navigate to="/signin" replace />;
@@ -210,7 +297,14 @@ export default function App() {
                 </RequireAuth>
               }
             />
-            <Route path="/room" element={<DraftSummary />} />
+            <Route
+              path="/room"
+              element={
+                <RequireAuth user={user}>
+                  <DraftSummary />
+                </RequireAuth>
+              }
+            />
             <Route path="/" element={<Home user={user} />} />
             <Route path="*" element={<Home user={user} />} />
             <Route

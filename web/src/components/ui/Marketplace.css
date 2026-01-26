@@ -127,3 +127,150 @@
   flex: 1;
   font-size: 14px;
 }
+
+/* --- Card + header --- */
+.marketCard {
+  margin-top: 2rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  padding: 1rem;
+}
+
+.marketHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap; /* badge drops below if needed */
+}
+
+/* --- Host controls --- */
+.marketHostGrid {
+  margin-top: 1rem;
+  display: grid;
+  gap: 12px;
+}
+
+@media (min-width: 768px) {
+  .marketHostGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.marketDurationRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .marketDurationRow {
+    grid-template-columns: 1fr; /* stack */
+  }
+}
+
+.marketDurationItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.marketNum {
+  width: 5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.marketUnit {
+  font-size: 0.875rem;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.marketHostActions {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .marketHostActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .marketHostActions .marketBtn {
+    width: 100%;
+  }
+}
+
+/* --- Choice rows (AcquireSearch + select) --- */
+.marketChoiceRow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+@media (max-width: 640px) {
+  .marketChoiceRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.marketChoiceFor {
+  font-size: 12px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .marketChoiceFor {
+    display: none; /* cleaner on mobile */
+  }
+}
+
+/* --- Bottom actions (Save/Edit) --- */
+.marketInterestActions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .marketInterestActions {
+    flex-direction: column;
+  }
+  .marketInterestActions .marketBtn {
+    width: 100%;
+  }
+}
+
+/* --- Buttons (kept simple & reusable) --- */
+.marketBtn {
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.marketBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.marketBtnAmber { background: #d97706; color: #fff; }
+.marketBtnGreen { background: #16a34a; color: #fff; }
+.marketBtnBlue  { background: #2563eb; color: #fff; }
+.marketBtnDark  { background: #0f172a; color: #fff; }
+
+.marketBtnOutline {
+  background: #fff;
+  color: #0f172a;
+}

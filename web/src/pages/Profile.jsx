@@ -1,42 +1,53 @@
 // web/src/pages/Profile.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { auth, saveDisplayName, watchUserProfile, getRememberMe, setRememberMe, signOutNow, uploadUserAvatar } from "../firebase";
+import {
+  auth,
+  db,
+  saveDisplayName,
+  watchUserProfile,
+  getRememberMe,
+  setRememberMe,
+  signOutNow,
+  uploadUserAvatar,
+  setLastRoomId,
+} from "../firebase";
 import { onAuthStateChanged } from "firebase/auth";
+import {
+  doc,
+  getDoc,
+  onSnapshot,
+  collection, 
+  query,
+  orderBy,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
+import "./Profile.css";
 
 export default function Profile() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
+
   const [name, setName] = useState("");
   const [remember, setRemember] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedPref, setSavedPref] = useState(false);
+
   const nav = useNavigate();
+
+  // Avatar
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarMsg, setAvatarMsg] = useState("");
 
-  //Profile Picture
-  async function handleUploadAvatar() {
-    if (!user?.uid || !avatarFile) return;
-
-    setAvatarUploading(true);
-    setAvatarMsg("");
-
-    try {
-      console.log("1)upload uid:", user.uid, "auth uid:", auth.currentUser?.uid);
-      await uploadUserAvatar(user.uid, avatarFile);
-      console.log("2.)upload uid:", user.uid, "auth uid:", auth.currentUser?.uid);
-      setAvatarFile(null);
-      setAvatarMsg("✅ Profile picture updated!");
-    } catch (e) {
-      setAvatarMsg(`❌ ${e?.message || "Upload failed"}`);
-    } finally {
-      setAvatarUploading(false);
-    }
-  }
-
+  // Rooms list
+  const [roomIdsByUidField, setRoomIdsByUidField] = useState([]);
+  const [roomIdsByDocId, setRoomIdsByDocId] = useState([]);
+  const [rooms, setRooms] = useState([]);
+  const [roomsLoading, setRoomsLoading] = useState(false);
+  const [roomsError, setRoomsError] = useState("");
 
   // watch auth user
   useEffect(() => onAuthStateChanged(auth, setUser), []);
@@ -61,6 +72,7 @@ export default function Profile() {
     if (!user?.uid) return;
     const displayName = name.trim();
     if (!displayName) return;
+
     setSaving(true);
     try {
       await saveDisplayName(user.uid, displayName);
@@ -77,55 +89,233 @@ export default function Profile() {
   }
 
   async function applyRememberNow() {
-    // To apply immediately, sign out so the next sign-in uses the new persistence
     await signOutNow();
+  }
+
+  async function handleUploadAvatar() {
+    if (!user?.uid || !avatarFile) return;
+
+    setAvatarUploading(true);
+    setAvatarMsg("");
+    try {
+      await uploadUserAvatar(user.uid, avatarFile);
+      setAvatarFile(null);
+      setAvatarMsg("✅ Profile picture updated!");
+    } catch (e) {
+      setAvatarMsg(`❌ ${e?.message || "Upload failed"}`);
+    } finally {
+      setAvatarUploading(false);
+    }
+  }
+
+  // --- Rooms membership watchers ---
+  // We listen in 2 ways so it works for BOTH:
+  // - old member docs (no uid field) => match by documentId == uid
+  // - new member docs (with uid field) => match by uid field
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    setRoomsLoading(true);
+    setRoomsError("");
+
+    const q = query(
+      collection(db, "users", user.uid, "rooms"),
+      orderBy("lastSeenAt", "desc")
+    );
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        setRooms(list);
+        setRoomsLoading(false);
+      },
+      (err) => {
+        setRoomsError(err?.message || "Failed to load rooms");
+        setRoomsLoading(false);
+      }
+    );
+
+    return unsub;
+  }, [user?.uid]);
+
+
+  const joinedRoomIds = useMemo(() => {
+    const s = new Set([...(roomIdsByUidField || []), ...(roomIdsByDocId || [])]);
+    return Array.from(s);
+  }, [roomIdsByUidField, roomIdsByDocId]);
+
+  // Fetch room docs for display (code + name + info)
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    let cancelled = false;
+
+    async function loadRooms() {
+      setRoomsError("");
+      setRoomsLoading(true);
+
+      try {
+        if (!joinedRoomIds.length) {
+          if (!cancelled) setRooms([]);
+          return;
+        }
+
+        const docs = await Promise.all(
+          joinedRoomIds.map(async (id) => {
+            const snap = await getDoc(doc(db, "rooms", id));
+            if (!snap.exists()) {
+              return { id, code: id, name: "(missing room)", missing: true };
+            }
+            const r = snap.data();
+
+            const updatedAt =
+              typeof r.updatedAt?.toMillis === "function"
+                ? r.updatedAt.toMillis()
+                : r.updatedAt || 0;
+
+            return {
+              id,
+              code: r.code || id,
+              name: r.name || "Room",
+              hostUid: r.hostUid || "",
+              membersCount: Array.isArray(r.members) ? r.members.length : null,
+              started: !!r.started,
+              startAt: r.startAt || null,
+              updatedAt,
+            };
+          })
+        );
+
+        docs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+        if (!cancelled) setRooms(docs);
+      } catch (e) {
+        if (!cancelled) setRoomsError(e?.message || "Failed to load rooms");
+      } finally {
+        if (!cancelled) setRoomsLoading(false);
+      }
+    }
+
+    loadRooms();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.uid, joinedRoomIds]);
+
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    if (!rooms?.length) return;
+
+    const unsubs = [];
+
+    rooms.forEach((r) => {
+      const roomId = r.roomId || r.id;
+      if (!roomId) return;
+
+      const unsub = onSnapshot(doc(db, "rooms", roomId), (snap) => {
+        if (!snap.exists()) return;
+
+        const data = snap.data();
+        setRooms((prev) =>
+          prev.map((x) => {
+            const xid = x.roomId || x.id;
+            if (xid !== roomId) return x;
+
+            return {
+              ...x,
+              // always show freshest name + code + started
+              name: data.name || x.name,
+              code: data.code || x.code,
+              started: !!data.started,
+              hostUid: data.hostUid || x.hostUid,
+              updatedAt:
+                typeof data.updatedAt?.toMillis === "function"
+                  ? data.updatedAt.toMillis()
+                  : data.updatedAt || x.updatedAt,
+            };
+          })
+        );
+      });
+
+      unsubs.push(unsub);
+    });
+
+    return () => unsubs.forEach((fn) => fn());
+  }, [user?.uid, rooms.map(r => r.roomId || r.id).join("|")]);
+
+
+  async function openRoom(roomId) {
+    // Saves “last room” and deep-links Draft to that room
+    setLastRoomId(roomId);
+
+    await setDoc(
+      doc(db, "users", user.uid, "rooms", roomId),
+      { lastSeenAt: serverTimestamp() },
+      { merge: true}
+    );
+
+    nav(`/draft?room=${roomId}`);
   }
 
   if (!user) {
     return (
-      <div className="min-h-[60vh] grid place-items-center p-6">
-        <div className="text-center">
-          <h1 className="text-xl font-bold">Please sign in first</h1>
-          <p className="opacity-70">Then come back to set your display name.</p>
+      <div className="profilePage">
+        <div className="profileWrap">
+          <div className="profileCard">
+            <h1 className="profileTitle">Please sign in first</h1>
+            <p className="profileSub">Then come back to set your profile.</p>
+            <button className="profileBtn profileBtnPrimary" onClick={() => nav("/signin")}>
+              Go to Sign In
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
+  const showName = profile?.displayName || user.email || "User";
+
   return (
-    <div className="min-h-[60vh] grid place-items-center p-6">
-      <div className="w-full max-w-md space-y-6">
-        <form onSubmit={onSaveDisplayName} className="border rounded-2xl p-6 bg-white shadow-sm">
-          <h1 className="text-xl font-bold mb-2">Choose your Display name</h1>
-          <p className="text-sm opacity-70 mb-4">Other users will see this name.</p>
+    <div className="profilePage">
+      <div className="profileWrap">
+        {/* Display Name */}
+        <form onSubmit={onSaveDisplayName} className="profileCard">
+          <h1 className="profileTitle">Choose your Display name</h1>
+          <p className="profileSub">Other users will see this name.</p>
+
           <input
-            className="w-full border rounded px-3 py-2 mb-3"
-            placeholder="e.g. Arman"
+            className="profileInput"
+            placeholder="e.g. Mando"
             value={name}
             onChange={(e) => setName(e.target.value)}
             maxLength={30}
             required
           />
+
           <button
             type="submit"
             disabled={saving || !name.trim()}
-            className="w-full px-3 py-2 rounded-xl border bg-black text-white disabled:opacity-50"
+            className="profileBtn profileBtnPrimary"
+            style={{ width: "100%" }}
           >
             {saving ? "Saving..." : "Save & Continue"}
           </button>
         </form>
-        <section className="border rounded-2xl p-6 bg-white shadow-sm">
-          <h2 className="text-xl font-bold mb-2">Profile Picture</h2>
 
-          <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        {/* Profile Picture */}
+        <section className="profileCard">
+          <h2 className="profileTitle">Profile Picture</h2>
+
+          <div className="avatarRow">
             <Avatar className="h-16 w-16">
               <AvatarImage src={profile?.photoURL || ""} alt="Profile picture" />
               <AvatarFallback>
-                {(profile?.displayName || user?.email || "?").slice(0, 2).toUpperCase()}
+                {showName.slice(0, 2).toUpperCase()}
               </AvatarFallback>
             </Avatar>
 
-            <div style={{ display: "grid", gap: 8 }}>
+            <div className="avatarControls">
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
@@ -134,23 +324,24 @@ export default function Profile() {
 
               <button
                 type="button"
+                className="profileBtn profileBtnPrimary"
                 onClick={handleUploadAvatar}
                 disabled={!avatarFile || avatarUploading}
               >
                 {avatarUploading ? "Uploading..." : "Upload"}
               </button>
 
-              {avatarMsg && <div style={{ fontSize: 13 }}>{avatarMsg}</div>}
-              <div style={{ fontSize: 12, opacity: 0.7 }}>
-                PNG/JPG/WEBP up to 2MB
-              </div>
+              {avatarMsg ? <div>{avatarMsg}</div> : null}
+              <div className="hint">PNG/JPG/WEBP up to 2MB</div>
             </div>
           </div>
         </section>
 
-        <div className="border rounded-2xl p-6 bg-white shadow-sm">
-          <h2 className="text-lg font-semibold mb-2">Sign-in preference</h2>
-          <label className="flex items-center gap-2 mb-3">
+        {/* Sign-in preference */}
+        <section className="profileCard">
+          <h2 className="profileTitle">Sign-in preference</h2>
+
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
             <input
               type="checkbox"
               checked={remember}
@@ -159,30 +350,74 @@ export default function Profile() {
             <span>Keep me signed in on this device</span>
           </label>
 
-          <div className="flex gap-3">
-            <button
-              onClick={onSaveRemember}
-              className="px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
-            >
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button type="button" className="profileBtn profileBtnPrimary" onClick={onSaveRemember}>
               Save preference
             </button>
-            <button
-              onClick={applyRememberNow}
-              className="px-3 py-2 rounded bg-slate-200 hover:bg-slate-300"
-              title="Sign out so your new preference applies on the next sign-in"
-            >
+            <button type="button" className="profileBtn profileBtnOutline" onClick={applyRememberNow}>
               Apply now (sign out)
             </button>
           </div>
 
-          {savedPref && (
-            <div className="mt-2 text-sm text-green-700">Saved!</div>
-          )}
+          {savedPref ? <div style={{ marginTop: 8, color: "#15803d", fontWeight: 700 }}>Saved!</div> : null}
 
-          <p className="mt-2 text-xs opacity-70">
+          <p className="hint" style={{ marginTop: 8 }}>
             This applies on your next sign-in. Click “Apply now” to sign out so the change takes effect immediately.
           </p>
-        </div>
+        </section>
+
+        {/* ✅ My Rooms */}
+        <section className="profileCard">
+          <h2 className="profileTitle">Your Rooms</h2>
+          <p className="profileSub">
+            Rooms you’ve joined. Tap to jump straight into the draft room.
+          </p>
+
+          {roomsLoading ? <div>Loading rooms…</div> : null}
+          {roomsError ? <div style={{ color: "crimson" }}>{roomsError}</div> : null}
+
+          {!roomsLoading && !roomsError && rooms.length === 0 ? (
+            <div className="hint">
+              You’re not in any rooms yet. Join one from the Draft page using a room code.
+            </div>
+          ) : null}
+
+          <div className="roomsList">
+            {rooms.map((r) => (
+              <div className="roomRow" key={r.id}>
+                <div className="roomInfo">
+                  <div className="roomName">{r.name}</div>
+
+                  <div className="roomMeta">
+                    <span className="roomCode">{r.code}</span>
+                    {typeof r.membersCount === "number" ? (
+                      <span>Members: {r.membersCount}</span>
+                    ) : null}
+                  </div>
+
+                  <div className="roomBadges">
+                    {r.hostUid === user.uid ? <span className="badge badgeHost">Host</span> : null}
+                    {r.started ? (
+                      <span className="badge badgeLive">Live</span>
+                    ) : (
+                      <span className="badge badgePending">Not started</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="roomActions">
+                  <button
+                    type="button"
+                    className="profileBtn profileBtnPrimary"
+                    onClick={() => openRoom(r.id)}
+                  >
+                    Join
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );
