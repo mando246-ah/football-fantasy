@@ -42,7 +42,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
 
 
 // ----- Config -----
-const TURN_SECONDS = 60;
+const TURN_SECONDS = 120;
 
 // ----- Mock pool (30 players) -----
 const MOCK_PLAYERS = [
@@ -287,7 +287,7 @@ export default function DraftWithPresence() {
         hostUid: user.uid,
         members: initialMembers,
         turnIndex: 0,
-        totalRounds: 11,
+        totalRounds: 16,                                  //<-------------------------------------change here for total rounds
         draftPlan: null,
         started: false,
         startAt: null,
@@ -351,8 +351,6 @@ export default function DraftWithPresence() {
       setCreatingRoom(false);
     }
   }
-
-
 
   // Join by code
   async function joinByCode() {
@@ -453,7 +451,7 @@ export default function DraftWithPresence() {
     const n = order.length;
     if (!n) return null;
     const ti = Number.isFinite(room.turnIndex) ? room.turnIndex : 0;
-    const totalRounds = room.totalRounds ?? 9;
+    const totalRounds = room.totalRounds ?? 16;
     const maxPicks = totalRounds * n;
     if (ti >= maxPicks) return null;
     const roundIndex = Math.floor(ti / n);
@@ -472,7 +470,7 @@ export default function DraftWithPresence() {
     if (!n) return null;
 
     const ti = Number.isFinite(room.turnIndex) ? room.turnIndex : 0;
-    const totalRounds = room.totalRounds ?? 9;
+    const totalRounds = room.totalRounds ?? 16;
     const maxPicks = totalRounds * n;
     if (ti + 1 >= maxPicks) return null;
 

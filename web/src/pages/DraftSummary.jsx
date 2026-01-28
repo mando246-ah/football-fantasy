@@ -23,6 +23,7 @@ function displayNameOf(m) {
   return m?.displayName || m?.uid || "User";
 }
 
+
 //Subs locked
 function useSubsLock(roomId, enabled) {
   const [locked, setLocked] = useState(false);
@@ -63,6 +64,7 @@ function useSubsLock(roomId, enabled) {
 
   return { locked, livePlayers };
 }
+
 
 export default function DraftSummary() {
   // pick up room from URL or last saved
@@ -344,15 +346,16 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
   const name = displayNameOf(manager);
   const showTeamName = teamName?.trim();
   const title = showTeamName ? `${name} — ${showTeamName}` : name;
+  const lineupRoomId = roomId;
 
   const isMe = myUid && manager.uid === myUid;
 
   // Ensure the "members mirror" doc exists so Firestore rules (isRoomMember) passes.
   useEffect(() => {
-    if (!isMe || !myUid || !roomPath) return;
+    if (!isMe || !myUid || !lineupRoomId) return;
 
     setDoc(
-      doc(db, "rooms", roomPath, "members", myUid),
+      doc(db, "rooms", lineupRoomId, "members", myUid),
       {
         uid: myUid,
         displayName: displayNameOf(manager),
@@ -370,7 +373,7 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
     !!room?.lineupsLocked ||             
     (room?.lineupLockAt && Date.now() >= Number(room.lineupLockAt));
 
-  const { locked: liveLocked, livePlayers } = useSubsLock(roomPath, isMe);
+  const { locked: liveLocked, livePlayers } = useSubsLock(lineupRoomId, isMe);
   const lockedNow = lineupLocked || liveLocked;
   const [editing, setEditing] = useState(false);
   const [input, setInput] = useState(teamName || "");
@@ -406,10 +409,10 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
   const didInitLineup = useRef(false);
 
   useEffect(() => {
-    if (!roomPath || !manager?.uid) return;
-    const ref = doc(db, "rooms", roomPath, "lineups", manager.uid);
+    if (!lineupRoomId || !manager?.uid) return;
+    const ref = doc(db, "rooms", lineupRoomId, "lineups", manager.uid);
     return onSnapshot(ref, (snap) => setLineupDoc(snap.exists() ? snap.data() : null));
-  }, [roomPath, manager?.uid]);
+  }, [lineupRoomId, manager?.uid]);
 
   const starters = useMemo(() => {
     const saved = Array.isArray(lineupDoc?.starters) ? lineupDoc.starters : null;
@@ -451,14 +454,14 @@ async function saveStarters(next) {
 
   // 1) Ensure member mirror exists (helps your rules / membership logic)
   await setDoc(
-      doc(db, "rooms", roomPath, "members", myUid),
+      doc(db, "rooms", lineupRoomId, "members", myUid),
       { uid: myUid, lastSeenAt: serverTimestamp() },
       { merge: true }
     );
 
     // 2) Write lineup
     await setDoc(
-      doc(db, "rooms", roomPath, "lineups", myUid),
+      doc(db, "rooms", lineupRoomId, "lineups", myUid),
       {
         uid: myUid,
         starters: clean,       // keep IDs for UI logic

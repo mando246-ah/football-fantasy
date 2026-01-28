@@ -94,3 +94,379 @@
   .tpGrid { grid-template-columns: 1fr; }
   .tpLineups { grid-template-columns: 1fr; }
 }
+.tpWrap { max-width: 1100px; margin: 0 auto; }
+.tpCard { background: #fff; border: 1px solid #e5e7eb; box-shadow: 0 6px 18px rgba(0,0,0,0.06); }
+.tpBoardHead { color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+.tpBoardRow { background: #f9fafb; border: 1px solid #eef2f7; }
+.tpBoardRow:hover { background: #f3f4f6; }
+.tpMuted { margin: 8px 0 0; color: #6b7280; }
+
+
+/* =========================
+   Head-to-head (Matchup) UI
+   ========================= */
+
+/* Make "tpFull" actually span full width inside tpGrid */
+.tpFull {
+  grid-column: 1 / -1;
+}
+
+/* Cards / layout tweaks for a clean white UI */
+.tpWrap {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.tpCard {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
+}
+
+/* Score summary box (used in Your Matchup + Other Matchups) */
+.tpMatchup {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+  overflow: hidden;
+}
+
+.tpMatchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.tpMatchRow:last-child {
+  border-bottom: none;
+}
+
+.tpMatchRow span:last-child {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.tpMatchFooter {
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  color: #6b7280;
+  border-top: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+/* Two lineups side-by-side (me vs opponent) */
+.tpLineups {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .tpLineups {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Lineup header (name + total pts) */
+.tpLineupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #ffffff;
+  margin-bottom: 10px;
+}
+
+.tpLineupTotal {
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+
+/* Player list rows (name / pos / pts) */
+.tpList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+/* Override your earlier 5-col layout: this view is 3 columns */
+.tpRow {
+  display: grid;
+  grid-template-columns: 1fr 64px 86px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid #eef2f7;
+}
+
+.tpRow:hover {
+  background: #f9fafb;
+}
+
+.tpName {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpMeta {
+  text-align: center;
+  font-size: 0.85rem;
+  color: #6b7280;
+  border: 1px solid #e5e7eb;
+  background: #f3f4f6;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.tpPts {
+  text-align: right;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* Other matchups: keep it compact */
+.tpCardTitle {
+  margin-bottom: 12px;
+}
+/* Highlight "my" lineup column */
+.tpSide {
+  border-radius: 14px;
+}
+
+.tpSideMe .tpLineupHead {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+
+.tpSideMe .tpRow {
+  border-color: #e0e7ff;
+}
+
+.tpSideMe .tpLineupTotal {
+  background: #e0e7ff;
+  border-color: #c7d2fe;
+}
+
+/* --- user chip (avatar + name + team name) --- */
+.tpUserChip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tpAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.06);
+  flex: 0 0 auto;
+}
+
+.tpUserText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.tpUserName {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tpUserTeam {
+  font-size: 0.85rem;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- lineup layout --- */
+.tpLineups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.tpLineupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.tpLineupTotal {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* player rows (your list items) */
+.tpRow {
+  display: grid;
+  grid-template-columns: 1fr 70px 70px;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+}
+
+.tpMeta { text-align: center; }
+
+/* --- matchup rows (Other Matchups totals) --- */
+.tpMatchRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+}
+
+.tpMatchTeams {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tpVs {
+  opacity: 0.6;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tpMatchScore {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* responsive */
+@media (max-width: 900px) {
+  .tpGrid { grid-template-columns: 1fr; }
+  .tpLineups { grid-template-columns: 1fr; }
+}
+
+/* Make page title pop */
+.tpTitle {
+  font-size: 34px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  margin: 0 0 6px;
+  line-height: 1.1;
+
+  background: linear-gradient(90deg, #2563eb, #7c3aed, #ef4444);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.tpCardTitle {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  margin: 0 0 12px;
+  position: relative;
+  padding-bottom: 10px;
+}
+
+.tpCardTitle::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 56px;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #2563eb, #7c3aed);
+}
+
+/* User chip (avatar + name + team) */
+.tpUserChip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tpAvatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  background: #f1f5f9;
+  flex: 0 0 auto;
+}
+
+.tpAvatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.tpAvatarFallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+  color: #334155;
+}
+
+.tpUserText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.tpUserName {
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tpUserMeta {
+  font-size: 12px;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Helps the leaderboard name column align nicely */
+.tpBoardName {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}

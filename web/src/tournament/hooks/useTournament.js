@@ -159,9 +159,11 @@ export function useTournament(roomId) {
             fetchLineupDoc(roomId, uid),
           ]);
 
-          const display = (profile?.displayName || profile?.name || uid).trim();
+          const displayName = (profile?.displayName || profile?.name || uid).trim();
           const teamName = (tnDoc?.teamName || profile?.teamName || "").trim();
-          const name = teamName ? `${display} — ${teamName}` : display;
+          const name = teamName ? `${displayName} — ${teamName}` : displayName;
+          const photoURL = (profile?.photoURL || profile?.avatarUrl || profile?.photoUrl || "").trim();
+
 
           const { inline, ids } = extractStarterIdsOrInline(lineup);
           if (ids.length) allStarterIds.push(...ids);
@@ -169,6 +171,9 @@ export function useTournament(roomId) {
           usersDraft.push({
             userId: uid,
             name,
+            displayName,
+            teamName,
+            photoURL,
             startersInline: inline,
             starterIds: ids,
           });
@@ -185,7 +190,14 @@ export function useTournament(roomId) {
                   .map((id) => playersById.get(id) || { id, name: "Unknown", position: "MID" })
                   .filter(Boolean);
 
-          return { userId: u.userId, name: u.name, starters };
+          return {
+          userId: u.userId,
+          name: u.name,               // legacy combined string
+          displayName: u.displayName, // clean display
+          teamName: u.teamName,
+          photoURL: u.photoURL,
+          starters,
+        };
         });
 
         // 6) Stats + LOCAL compute (Option A fallback)

@@ -684,6 +684,75 @@ function genMockFixturesAroundNow(playerId, nowMs) {
 function isLive(nowMs, kickoffMs) {
   const DURATION_MS = 2 * 60 * 60 * 1000; // ~2 hours
   return nowMs >= kickoffMs && nowMs <= kickoffMs + DURATION_MS;
+
+
+// --- Real stats helpers (API-Football) --------------------------------------
+function toNum(v) {
+  const n = Number(String(v ?? "").replace("%", ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+// Convert API-Football fixtures/players entry -> our scoring shape
+function extractFixturePlayerStat(playerEntry) {
+  const s0 = Array.isArray(playerEntry?.statistics) ? playerEntry.statistics[0] : null;
+
+  const minutes = toNum(s0?.games?.minutes);
+  const goals = toNum(s0?.goals?.total);
+  const assists = toNum(s0?.goals?.assists);
+
+  const passesTotal = toNum(s0?.passes?.total);
+  const passAcc = toNum(s0?.passes?.accuracy); // often "85"
+  const passesCompleted =
+    passesTotal > 0 && passAcc > 0 ? Math.round((passesTotal * passAcc) / 100) : passesTotal;
+
+  return { minutes, goals, assists, passesCompleted };
+}
+
+async function fetchFixturePlayersStatsMap(fixtureId, apiKey) {
+  const json = await apiFootballGet("fixtures/players", { fixture: fixtureId }, apiKey);
+  const resp = Array.isArray(json?.response) ? json.response : [];
+
+  const map = {}; // playerId -> {minutes, goals, assists, passesCompleted}
+  for (const teamBlock of resp) {
+    const players = Array.isArray(teamBlock?.players) ? teamBlock.players : [];
+    for (const pl of players) {
+      const pid = pl?.player?.id;
+      if (!pid) continue;
+      map[String(pid)] = extractFixturePlayerStat(pl);
+    }
+  }
+  return map;
+}
+
+// Cache per fixture so multiple rooms share the same API call
+async function getFixturePlayersStatsCached({ fixtureId, kickoffMs, nowMs, apiKey }) {
+  const cacheRef = db.doc(`apiCache/fixturePlayers_${fixtureId}`);
+  const snap = await cacheRef.get();
+
+  const updatedAtMs = snap.exists ? Number(snap.data()?.updatedAtMs || 0) : 0;
+  const hasCached = snap.exists && !!snap.data()?.statsByPlayerId;
+
+  // TTL: during/near match = ~90s; long after kickoff = 10min
+  const ageMs = nowMs - updatedAtMs;
+  const afterGame =
+    Number.isFinite(kickoffMs) && Number.isFinite(nowMs) && nowMs - kickoffMs > 3 * 60 * 60 * 1000;
+
+  const TTL_MS = afterGame ? 10 * 60 * 1000 : 90 * 1000;
+
+  if (hasCached && ageMs >= 0 && ageMs < TTL_MS) {
+    return { cached: true, statsByPlayerId: snap.data().statsByPlayerId || {} };
+  }
+
+  const statsByPlayerId = await fetchFixturePlayersStatsMap(fixtureId, apiKey);
+
+  await cacheRef.set(
+    { updatedAtMs: nowMs, kickoffMs: kickoffMs ?? null, statsByPlayerId },
+    { merge: true }
+  );
+
+  return { cached: false, statsByPlayerId };
+}
+// ---------------------------------------------------------------------------
 }
 
 exports.getUserLockStatus = onCall(
@@ -741,23 +810,10 @@ exports.getUserLockStatus = onCall(
       };
     }
 
-
-    if (myTeamIds.size === 0) {
-      return {
-        ok: true,
-        locked: false,
-        nowMs,
-        livePlayers: [],
-        checkedPlayers: myPlayers.length,
-        provider: "api-football",
-        note: "No teamIds found for this user yet.",
-      };
-    }
-
     // 3) Cached live fixtures for competition
     async function getLiveFixturesCached() {
       const cacheId = `${league}_${season}`;
-      const cacheRef = db.doc(`apiCache/liveFixtures/${cacheId}`);
+      const cacheRef = db.doc(`apiCache/liveFixtures_${cacheId}`);
       const cacheSnap = await cacheRef.get();
 
       const TTL_MS = 30 * 1000; // 30s cache
@@ -830,7 +886,7 @@ exports.getUserLockStatus = onCall(
       nowMs,
       provider: "api-football",
       cached: liveFxRes.cached,
-      checkedPlayers: myPlayers.length,
+      checkedPlayers: starters.length,
       livePlayers,          // for your UI “Subs locked: names…”
       matchedFixtures,      // useful for debugging
       competition: { league, season, timezone },
@@ -956,48 +1012,23 @@ function sumStats(a, b) {
   };
 }
 
-function isoDateInTZ(timeZone, d = new Date()) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-}
-
-function addDaysISO(iso, days) {
-  const dt = new Date(`${iso}T12:00:00Z`);
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
-}
-
-
-async function fetchNextRoundWindow({ league, season, timezone }, opts={}) {
+async function fetchNextRoundWindow({ league, season, timezone }) {
   const apiKey = APIFOOTBALL_KEY.value();
-  const fallbackDate = opts.fallbackDate || null;
 
-  // 1) Try normal upcoming fixtures
-  let fx = await apiFootballGet("fixtures", { league, season, next: 100, timezone }, apiKey);
-  let list = Array.isArray(fx?.response) ? fx.response : [];
+  // Get next batch of fixtures and use the earliest fixture's "round" as the week grouping
+  const fx = await apiFootballGet(
+    "fixtures",
+    { league, season, next: 100, timezone },
+    apiKey
+  );
 
-  // 2) If empty, try a from/to window (more reliable than next on some configs)
-  if (!list.length) {
-    const from = isoDateInTZ(timezone);
-    const to = addDaysISO(from, 90);
-    fx = await apiFootballGet("fixtures", { league, season, from, to, timezone }, apiKey);
-    list = Array.isArray(fx?.response) ? fx.response : [];
-  }
-
-  // 3) If STILL empty, fallback to the seeded Wednesday date
-  if (!list.length && fallbackDate) {
-    fx = await apiFootballGet("fixtures", { league, season, date: fallbackDate, timezone }, apiKey);
-    list = Array.isArray(fx?.response) ? fx.response : [];
-  }
-
+  const list = Array.isArray(fx?.response) ? fx.response : [];
   if (!list.length) return null;
 
   const roundLabel = list[0]?.league?.round || null;
-  const sameRound = roundLabel ? list.filter((m) => m?.league?.round === roundLabel) : list;
+  const sameRound = roundLabel
+    ? list.filter((m) => m?.league?.round === roundLabel)
+    : list;
 
   const fixtures = sameRound
     .map((m) => ({
@@ -1057,8 +1088,7 @@ exports.createNextWeek = onCall(
       timezone: "America/Los_Angeles",
     };
 
-    const fallbackDate = room?.seedFilter?.fixtureDate || null;
-    const window = await fetchNextRoundWindow(competition, { fallbackDate });
+    const window = await fetchNextRoundWindow(competition);
     if (!window) throw new HttpsError("failed-precondition", "No upcoming fixtures found for this competition.");
 
     // Round-robin matchups
@@ -1087,39 +1117,45 @@ exports.createNextWeek = onCall(
   }
 );
 
-exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
-  const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
 
-  const roomId = request.data?.roomId;
-  const weekIndex = Number(request.data?.weekIndex);
-  if (!roomId || !Number.isFinite(weekIndex)) {
-    throw new HttpsError("invalid-argument", "roomId and weekIndex are required.");
-  }
-
+// --- Week results computation (REAL stats, cached) ---------------------------
+async function computeWeekResultsInternal({ roomId, weekIndex, nowMs, apiKey, computedByUid }) {
   const roomSnap = await db.doc(`rooms/${roomId}`).get();
   if (!roomSnap.exists) throw new HttpsError("not-found", "Room not found.");
   const room = roomSnap.data() || {};
-  if (!isHost(room, uid)) throw new HttpsError("permission-denied", "Host only.");
 
-  const weekSnap = await db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`).get();
-  if (!weekSnap.exists) throw new HttpsError("failed-precondition", "Week doc not found. Create week first.");
+  if (computedByUid && !isHost(room, computedByUid)) {
+    throw new HttpsError("permission-denied", "Host only.");
+  }
+
+  const weekRef = db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`);
+  const weekSnap = await weekRef.get();
+  if (!weekSnap.exists) {
+    throw new HttpsError("failed-precondition", "Week doc not found. Create week first.");
+  }
   const week = weekSnap.data() || {};
-  const startAtMs = Number(week.startAtMs);
-  const endAtMs = Number(week.endAtMs);
+  const startAtMs = Number(week.startAtMs || 0);
+  const endAtMs = Number(week.endAtMs || 0);
+  if (!startAtMs || !endAtMs) {
+    throw new HttpsError("failed-precondition", "Week is missing startAtMs/endAtMs.");
+  }
 
+  // members
   const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
   const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean).sort();
+  if (memberUids.length < 2) {
+    return { ok: true, skipped: true, reason: "Need at least 2 managers." };
+  }
 
   // build users + starters (starters only score)
   const users = [];
   for (const mUid of memberUids) {
     const userSnap = await db.doc(`users/${mUid}`).get();
-    const profile = userSnap.exists ? userSnap.data() : {};
-    const display = (profile.displayName || profile.name || mUid).trim();
+    const profile = userSnap.exists ? (userSnap.data() || {}) : {};
+    const display = String(profile.displayName || profile.name || mUid).trim();
 
     const tnSnap = await db.doc(`rooms/${roomId}/teamNames/${mUid}`).get();
-    const tn = tnSnap.exists ? (tnSnap.data().teamName || "") : "";
+    const tn = tnSnap.exists ? String(tnSnap.data()?.teamName || "") : "";
     const name = tn ? `${display} — ${tn}` : display;
 
     const lineupSnap = await db.doc(`rooms/${roomId}/lineups/${mUid}`).get();
@@ -1130,9 +1166,37 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
   }
 
   // matchups from week doc, else generate
-  const matchupPairs = Array.isArray(week.matchups) && week.matchups.length
-    ? week.matchups
-    : roundRobinPairings(memberUids, weekIndex);
+  const matchupPairs =
+    Array.isArray(week.matchups) && week.matchups.length
+      ? week.matchups
+      : roundRobinPairings(memberUids, weekIndex);
+
+  // fixtures in week window
+  const weekFixtures = Array.isArray(week.fixtures) ? week.fixtures : [];
+  const inWindow = weekFixtures
+    .map((f) => ({ id: String(f.id), kickoffMs: Number(f.kickoffMs) }))
+    .filter((f) => f.id && Number.isFinite(f.kickoffMs))
+    .filter((f) => f.kickoffMs >= startAtMs && f.kickoffMs <= endAtMs);
+
+  // Only fetch fixtures that have started (reduces API calls)
+  const started = inWindow.filter((f) => f.kickoffMs <= nowMs);
+
+  // Load fixture stats maps (cached, shared across rooms)
+  const fixtureStatsMaps = new Map(); // fixtureId -> statsByPlayerId map
+  for (const fx of started) {
+    try {
+      const got = await getFixturePlayersStatsCached({
+        fixtureId: fx.id,
+        kickoffMs: fx.kickoffMs,
+        nowMs,
+        apiKey,
+      });
+      fixtureStatsMaps.set(fx.id, got.statsByPlayerId || {});
+    } catch (e) {
+      console.error(`[computeWeekResultsInternal] fixture=${fx.id} fetch failed`, e);
+      fixtureStatsMaps.set(fx.id, {});
+    }
+  }
 
   // score
   const totalsByUid = {};
@@ -1140,19 +1204,14 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
 
   for (const u of users) {
     const statsByPlayerId = {};
-    for (const p of u.starters) {
-      const weekFixtures = Array.isArray(week.fixtures) ? week.fixtures : [];
-      const inWindow = weekFixtures.filter((f) => f.kickoffMs >= startAtMs && f.kickoffMs <= endAtMs);
 
+    for (const p of u.starters) {
       let agg = { minutes: 0, passesCompleted: 0, goals: 0, assists: 0 };
 
-      if (inWindow.length === 0) {
-        agg = { minutes: 0, passesCompleted: 0, goals: 0, assists: 0 };
-      } else {
-        // For now (until we store apiTeamId), assign each player to ONE fixture deterministically
-        const pickIdx = hashToUint32(`${weekIndex}:${p.id}`) % inWindow.length;
-        const fx = inWindow[pickIdx];
-        agg = sumStats(agg, genMockFixtureStats(weekIndex, p, fx.kickoffMs));
+      for (const fx of started) {
+        const map = fixtureStatsMaps.get(fx.id);
+        const st = map ? map[String(p.id)] : null;
+        if (st) agg = sumStats(agg, st);
       }
 
       statsByPlayerId[p.id] = agg;
@@ -1163,14 +1222,26 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
     breakdownByUserId[u.userId] = scored;
   }
 
+  const isFinal = nowMs > endAtMs + 3 * 60 * 60 * 1000; // 3h after last kickoff
+  const matchupStatus = isFinal ? "FINAL" : "LIVE";
+
   // build matchups results
   const matchups = matchupPairs.map((pair) => {
     const homeTotal = totalsByUid[pair.homeUserId] ?? 0;
     const awayTotal = totalsByUid[pair.awayUserId] ?? 0;
 
-    let homeResult = "L", awayResult = "W", winnerUserId = pair.awayUserId;
-    if (homeTotal > awayTotal) { homeResult = "W"; awayResult = "L"; winnerUserId = pair.homeUserId; }
-    else if (homeTotal === awayTotal) { homeResult = "D"; awayResult = "D"; winnerUserId = null; }
+    let homeResult = "L",
+      awayResult = "W",
+      winnerUserId = pair.awayUserId;
+    if (homeTotal > awayTotal) {
+      homeResult = "W";
+      awayResult = "L";
+      winnerUserId = pair.homeUserId;
+    } else if (homeTotal === awayTotal) {
+      homeResult = "D";
+      awayResult = "D";
+      winnerUserId = null;
+    }
 
     return {
       weekIndex,
@@ -1181,7 +1252,7 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
       homeResult,
       awayResult,
       winnerUserId,
-      status: "FINAL",
+      status: matchupStatus,
     };
   });
 
@@ -1192,7 +1263,17 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
   const resultsSnap = await db.collection(`rooms/${roomId}/weekResults`).get();
   const agg = {}; // uid -> { played,w,d,l,tablePoints,totalFantasyPoints,name }
   function ensure(uid, name) {
-    if (!agg[uid]) agg[uid] = { userId: uid, name, played: 0, wins: 0, draws: 0, losses: 0, tablePoints: 0, totalFantasyPoints: 0 };
+    if (!agg[uid])
+      agg[uid] = {
+        userId: uid,
+        name,
+        played: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        tablePoints: 0,
+        totalFantasyPoints: 0,
+      };
     if (name) agg[uid].name = name;
     return agg[uid];
   }
@@ -1244,7 +1325,7 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
   for (const u of users) ensure(u.userId, u.name);
 
   const standings = Object.values(agg).sort(
-    (a, b) => (b.tablePoints - a.tablePoints) || (b.totalFantasyPoints - a.totalFantasyPoints)
+    (a, b) => b.tablePoints - a.tablePoints || b.totalFantasyPoints - a.totalFantasyPoints
   );
 
   // write weekResults + standings/current
@@ -1260,6 +1341,7 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
       matchups,
       weekLeaderboard,
       computedAt: admin.firestore.FieldValue.serverTimestamp(),
+      status: matchupStatus,
     },
     { merge: true }
   );
@@ -1273,14 +1355,96 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
     { merge: true }
   );
 
-  await db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`).set(
-    { status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() },
+  // update week status (don't finalize until window is safely over)
+  await weekRef.set(
+    isFinal
+      ? { status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() }
+      : { status: "live", lastComputedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
   );
 
-  return { ok: true, weekIndex };
-});
+  return { ok: true, weekIndex, status: matchupStatus, isFinal };
+}
 
+exports.computeWeekResults = onCall(
+  { region: "us-west2", secrets: [APIFOOTBALL_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
+
+    const roomId = request.data?.roomId;
+    const weekIndex = Number(request.data?.weekIndex);
+    if (!roomId || !Number.isFinite(weekIndex)) {
+      throw new HttpsError("invalid-argument", "roomId and weekIndex are required.");
+    }
+
+    const nowMs = Number(request.data?.nowMs ?? Date.now());
+    const apiKey = APIFOOTBALL_KEY.value();
+
+    // enforce host for the callable
+    return computeWeekResultsInternal({ roomId, weekIndex, nowMs, apiKey, computedByUid: uid });
+  }
+);
+
+/**
+ * Auto recompute live weeks every minute (shared cache means low API usage).
+ * This is what makes points update "live" without pressing buttons.
+ */
+exports.pollLiveWeeks = onSchedule(
+  {
+    schedule: "*/1 * * * *",
+    timeZone: "America/Los_Angeles",
+    region: "us-west2",
+    secrets: [APIFOOTBALL_KEY],
+  },
+  async () => {
+    const nowMs = Date.now();
+    const apiKey = APIFOOTBALL_KEY.value();
+
+    const roomsSnap = await db
+      .collection("rooms")
+      .where("currentWeekIndex", ">", 0)
+      .limit(50)
+      .get();
+
+    if (roomsSnap.empty) return;
+
+    for (const roomDoc of roomsSnap.docs) {
+      const roomId = roomDoc.id;
+      const room = roomDoc.data() || {};
+      const weekIndex = Number(room.currentWeekIndex || 0);
+      if (!Number.isFinite(weekIndex) || weekIndex <= 0) continue;
+
+      const last = Number(room.lastAutoComputeAtMs || 0);
+      if (nowMs - last < 55 * 1000) continue;
+
+      const weekRef = db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`);
+      const weekSnap = await weekRef.get();
+      if (!weekSnap.exists) continue;
+
+      const week = weekSnap.data() || {};
+      if (week.status === "final") continue;
+
+      const startAtMs = Number(week.startAtMs || 0);
+      const endAtMs = Number(week.endAtMs || 0);
+      if (!startAtMs || !endAtMs) continue;
+
+      // Only compute near / during the window (start-2h .. end+6h)
+      if (nowMs < startAtMs - 2 * 60 * 60 * 1000) continue;
+      if (nowMs > endAtMs + 6 * 60 * 60 * 1000 && week.status === "final") continue;
+
+      // throttle marker
+      await db.doc(`rooms/${roomId}`).set({ lastAutoComputeAtMs: nowMs }, { merge: true });
+
+      try {
+        await computeWeekResultsInternal({ roomId, weekIndex, nowMs, apiKey });
+      } catch (e) {
+        console.error(`[pollLiveWeeks] room=${roomId} week=${weekIndex} failed`, e);
+      }
+    }
+  }
+);
+// ---------------------------------------------------------------------------
 
 
 //Emails , timers, Market Opens 
@@ -1655,7 +1819,7 @@ exports.getLiveFixturesCached = onCall(
 
     // Cache doc per competition
     const cacheId = `${league}_${season}`;
-    const cacheRef = db.doc(`apiCache/liveFixtures/${cacheId}`);
+    const cacheRef = db.doc(`apiCache/liveFixtures_${cacheId}`);
     const cacheSnap = await cacheRef.get();
 
     const now = Date.now();
