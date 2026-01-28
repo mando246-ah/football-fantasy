@@ -1,56 +1,121 @@
-// src/tournament/hooks/useTournament.js
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { db, auth } from "../../firebase";
 import { getStatsProvider } from "../services/statsProvider";
 import { computeRoundResults } from "../logic/roundEngine";
 
-/**
- * Base starter template (positions are what scoring expects: GK/DEF/MID/FWD)
- * IDs here are just "base" IDs — we’ll suffix them per user so each user’s stats are unique.
- */
-const BASE_STARTERS = [
-  { id: "p1", name: "GK One", position: "GK" },
-  { id: "p2", name: "DEF A", position: "DEF" },
-  { id: "p3", name: "DEF B", position: "DEF" },
-  { id: "p4", name: "DEF C", position: "DEF" },
-  { id: "p5", name: "DEF D", position: "DEF" },
-  { id: "p6", name: "MID A", position: "MID" },
-  { id: "p7", name: "MID B", position: "MID" },
-  { id: "p8", name: "MID C", position: "MID" },
-  { id: "p9", name: "FWD A", position: "FWD" },
-  { id: "p10", name: "FWD B", position: "FWD" },
-  { id: "p11", name: "FWD C", position: "FWD" },
-];
+/** ---------- helpers ---------- **/
 
-function withSuffix(players, suffix) {
-  return players.map((p) => ({
-    ...p,
-    id: `${p.id}_${suffix}`,
-  }));
+function toPos(pos) {
+  const p = String(pos || "").toUpperCase();
+  if (p === "GK" || p === "GKP" || p.includes("KEEP")) return "GK";
+  if (p === "DEF" || p.includes("BACK")) return "DEF";
+  if (p === "MID" || p.includes("MID")) return "MID";
+  if (p === "FWD" || p.includes("FORW") || p.includes("STRIK")) return "FWD";
+  return "MID";
+}
+
+function normalizePlayer(raw) {
+  if (!raw) return null;
+
+  // raw can be object OR string id
+  if (typeof raw === "string") {
+    return { id: raw, name: "Unknown", position: "MID" };
+  }
+
+  const id = raw.id || raw.playerId || raw.pid;
+  if (!id) return null;
+
+  return {
+    id: String(id),
+    name: raw.name || raw.fullName || raw.displayName || "Unknown",
+    position: toPos(raw.position || raw.pos || raw.role),
+  };
 }
 
 /**
- * Step-3 demo users. Replace later with real Firestore room members + rosters.
+ * Extract starters in a way that supports:
+ * - starters: [ {id,name,position}, ... ]
+ * - starters: [ "playerId1", "playerId2", ... ]
+ * - startingXI / starting11
+ * - lineup.starters / lineup.startingXI / lineup.starting11
+ * - starterIds
  */
-function buildDemoUsers() {
-  return [
-    { userId: "u1", name: "Mando", starters: withSuffix(BASE_STARTERS, "u1") },
-    { userId: "u2", name: "Nick", starters: withSuffix(BASE_STARTERS, "u2") },
-    { userId: "u3", name: "Ana", starters: withSuffix(BASE_STARTERS, "u3") },
-    { userId: "u4", name: "Jose", starters: withSuffix(BASE_STARTERS, "u4") },
+function extractStarterIdsOrInline(lineupData) {
+  if (!lineupData) return { inline: [], ids: [] };
+
+  const candidates = [
+    lineupData.starters,
+    lineupData.startingXI,
+    lineupData.starting11,
+    lineupData.startingIds,
+    lineupData.starterIds,
+    lineupData.lineup?.starters,
+    lineupData.lineup?.startingXI,
+    lineupData.lineup?.starting11,
+    lineupData.currentLineup?.starters,
+    lineupData.currentLineup?.startingXI,
+    lineupData.currentLineup?.starting11,
   ];
+
+  for (const c of candidates) {
+    if (!Array.isArray(c) || c.length === 0) continue;
+
+    // If it's a list of strings => ids
+    if (typeof c[0] === "string") {
+      return { inline: [], ids: c.map(String) };
+    }
+
+    // Otherwise treat as inline player objects
+    const inline = c.map(normalizePlayer).filter(Boolean);
+    if (inline.length) return { inline, ids: [] };
+  }
+
+  return { inline: [], ids: [] };
 }
+
+async function fetchUserDoc(uid) {
+  const snap = await getDoc(doc(db, "users", uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+async function fetchTeamNameDoc(roomId, uid) {
+  const snap = await getDoc(doc(db, "rooms", roomId, "teamNames", uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+async function fetchLineupDoc(roomId, uid) {
+  const snap = await getDoc(doc(db, "rooms", roomId, "lineups", uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+async function fetchPlayersByIds(roomId, ids) {
+  const unique = Array.from(new Set(ids));
+  const map = new Map();
+
+  await Promise.all(
+    unique.map(async (id) => {
+      const snap = await getDoc(doc(db, "rooms", roomId, "players", id));
+      if (snap.exists()) {
+        const d = snap.data();
+        map.set(id, {
+          id,
+          name: d.name || d.fullName || d.displayName || "Unknown",
+          position: toPos(d.position || d.pos || d.role),
+        });
+      }
+    })
+  );
+
+  return map;
+}
+
+/** ---------- hook ---------- **/
 
 export function useTournament(roomId) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  // What TournamentPage will consume
   const [data, setData] = useState(null);
-
-  // For now, round is fixed (later: comes from room state)
-  const roundId = 1;
-
-  const users = useMemo(() => buildDemoUsers(), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,32 +125,111 @@ export function useTournament(roomId) {
       setError(null);
 
       try {
-        const provider = getStatsProvider();
+        const myUid = auth.currentUser?.uid;
+        if (!myUid) throw new Error("Not signed in");
 
-        // Fetch stats per user (keeps it simple and clear)
+        // 1) Room doc (allowed: authed read)
+        const roomSnap = await getDoc(doc(db, "rooms", roomId));
+        if (!roomSnap.exists()) throw new Error(`Room ${roomId} not found`);
+        const room = roomSnap.data() || {};
+        const roundId = Number(room.currentRound ?? room.roundId ?? 1);
+
+        // 2) Membership check (your membership model)
+        const myMemberSnap = await getDoc(doc(db, "rooms", roomId, "members", myUid));
+        if (!myMemberSnap.exists()) {
+          throw new Error(
+            "You are not registered as a room member (missing rooms/{roomId}/members/{uid}). " +
+              "Join the room from the Draft/Join flow so the member doc is created."
+          );
+        }
+
+        // 3) Load members
+        const memSnap = await getDocs(collection(db, "rooms", roomId, "members"));
+        const memberUids = memSnap.docs.map((d) => d.id).filter(Boolean);
+        if (!memberUids.length) throw new Error("No room members found.");
+
+        // 4) Load lineup docs + collect starter IDs that need resolving
+        const usersDraft = [];
+        const allStarterIds = [];
+
+        for (const uid of memberUids) {
+          const [profile, tnDoc, lineup] = await Promise.all([
+            fetchUserDoc(uid),
+            fetchTeamNameDoc(roomId, uid),
+            fetchLineupDoc(roomId, uid),
+          ]);
+
+          const display = (profile?.displayName || profile?.name || uid).trim();
+          const teamName = (tnDoc?.teamName || profile?.teamName || "").trim();
+          const name = teamName ? `${display} — ${teamName}` : display;
+
+          const { inline, ids } = extractStarterIdsOrInline(lineup);
+          if (ids.length) allStarterIds.push(...ids);
+
+          usersDraft.push({
+            userId: uid,
+            name,
+            startersInline: inline,
+            starterIds: ids,
+          });
+        }
+
+        // 5) Resolve starter IDs into player objects using rooms/{roomId}/players/{playerId}
+        const playersById = await fetchPlayersByIds(roomId, allStarterIds);
+
+        const users = usersDraft.map((u) => {
+          const starters =
+            u.startersInline.length > 0
+              ? u.startersInline
+              : u.starterIds
+                  .map((id) => playersById.get(id) || { id, name: "Unknown", position: "MID" })
+                  .filter(Boolean);
+
+          return { userId: u.userId, name: u.name, starters };
+        });
+
+        // 6) Stats + LOCAL compute (Option A fallback)
+        const provider = getStatsProvider();
         const statsByPlayerIdByUserId = {};
 
         for (const u of users) {
-          const statsByPlayerId = await provider.getRoundStats({
+          statsByPlayerIdByUserId[u.userId] = await provider.getRoundStats({
             roomId,
             roundId,
             players: u.starters,
           });
-
-          statsByPlayerIdByUserId[u.userId] = statsByPlayerId;
         }
 
-        const results = computeRoundResults({
+        const localResults = computeRoundResults({
           roomId,
           roundId,
           users,
           statsByPlayerIdByUserId,
         });
 
+        // 7) Prefer OFFICIAL results if they exist
+        let officialResults = null;
+        const rrRef = doc(db, "rooms", roomId, "roundResults", String(roundId));
+        const rrSnap = await getDoc(rrRef);
+        if (rrSnap.exists()) officialResults = rrSnap.data();
+
+        // If official is missing breakdown, fill it so per-player points still show
+        const results = officialResults
+          ? {
+              ...localResults,
+              ...officialResults,
+              breakdownByUserId: officialResults.breakdownByUserId ?? localResults.breakdownByUserId,
+              teamScoresByUserId: officialResults.teamScoresByUserId ?? localResults.teamScoresByUserId,
+              matchups: officialResults.matchups ?? localResults.matchups,
+              leaderboard: officialResults.leaderboard ?? localResults.leaderboard,
+            }
+          : localResults;
+
         if (!cancelled) {
           setData({
             roomId,
             roundId,
+            room,
             users,
             statsByPlayerIdByUserId,
             results,
@@ -100,7 +244,6 @@ export function useTournament(roomId) {
 
     if (roomId) run();
     else {
-      // still let TournamentPage show the "join/create room" UI when no roomId
       setLoading(false);
       setData(null);
     }
@@ -108,8 +251,7 @@ export function useTournament(roomId) {
     return () => {
       cancelled = true;
     };
-  }, [roomId, roundId, users]);
+  }, [roomId]);
 
   return { loading, error, data };
 }
-

@@ -184,7 +184,6 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
   const [isEditing, setIsEditing] = useState(true); // default: editable
   const [saveStatus, setSaveStatus] = useState(""); 
   const [ marketResults, setMarketResults ] = useState([]);
-  const [availableLimit, setAvailableLimit] = useState(30); // how many "Available Players" cards to show
 
   //Display Results After Market Closes
   useEffect(() => {
@@ -281,17 +280,6 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
     if (roomId) load();
   }, [roomId, user?.uid, market?.status, players]);
 
-
-
-  // Limit how many Available Players are rendered (less scrolling / faster)
-  useEffect(() => {
-    setAvailableLimit(30);
-  }, [roomId]);
-
-  const visibleUndrafted = useMemo(
-    () => (undrafted || []).slice(0, availableLimit),
-    [undrafted, availableLimit]
-  );
 
   const [now, setNow] = useState(Date.now());
 
@@ -515,7 +503,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
       <div className="mt-4">
         <div className="font-semibold mb-2">Available Players</div>
         <div className="grid gap-2 md:grid-cols-3">
-          {visibleUndrafted.map(p => (
+          {undrafted.map(p => (
             <div key={p.id} className="border rounded p-2">
               <div className="font-medium">{p.name}</div>
               <div className="text-xs opacity-70">{p.position}</div>
@@ -523,31 +511,6 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
           ))}
           {undrafted.length === 0 && <div className="opacity-60 text-sm">None.</div>}
         </div>
-        {undrafted.length > 0 && (
-          <div className="mt-3 flex items-center gap-2">
-            <div className="text-xs opacity-60">
-              Showing {Math.min(availableLimit, undrafted.length)} of {undrafted.length}
-            </div>
-            {undrafted.length > availableLimit && (
-              <button
-                type="button"
-                className="marketBtn marketBtnOutline"
-                onClick={() => setAvailableLimit((n) => n + 30)}
-              >
-                Show more
-              </button>
-            )}
-            {availableLimit > 30 && (
-              <button
-                type="button"
-                className="marketBtn marketBtnOutline"
-                onClick={() => setAvailableLimit(30)}
-              >
-                Show less
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {/* My interest (private to me) */}

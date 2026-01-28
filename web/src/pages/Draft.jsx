@@ -42,7 +42,7 @@ import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
 
 
 // ----- Config -----
-const TURN_SECONDS = 30;
+const TURN_SECONDS = 60;
 
 // ----- Mock pool (30 players) -----
 const MOCK_PLAYERS = [
@@ -122,6 +122,43 @@ function countdownStr(sec) {
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 
+// Returns next occurrence of a weekday as YYYY-MM-DD in a given IANA timezone.
+// targetDow: 0=Sun ... 6=Sat
+function nextWeekdayISO(targetDow, timeZone = "America/Los_Angeles") {
+  const DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const now = new Date();
+  let currentDow;
+
+  try {
+    const dowStr = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone }).format(now);
+    currentDow = DOW[dowStr];
+  } catch {
+    currentDow = now.getDay();
+  }
+  if (typeof currentDow !== "number") currentDow = now.getDay();
+
+  const t = Number(targetDow);
+  const target = Number.isFinite(t) ? ((t % 7) + 7) % 7 : 3;
+
+  let delta = (target - currentDow + 7) % 7;
+  const day = new Date(now.getTime() + delta * 24 * 60 * 60 * 1000);
+
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      timeZone,
+    }).format(day);
+  } catch {
+    const y = day.getFullYear();
+    const m = String(day.getMonth() + 1).padStart(2, "0");
+    const d = String(day.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+}
+
+
 
 export default function DraftWithPresence() {
   // Auth
@@ -140,6 +177,8 @@ export default function DraftWithPresence() {
   const [members, setMembers] = useState([]);
   const [picks, setPicks] = useState([]);
   const [joining, setJoining] = useState(false);
+  const [creatingRoom, setCreatingRoom] = useState(false);
+  const [seedingPlayers, setSeedingPlayers] = useState(false);
 
   // Host scheduling
   const [startLocalISO, setStartLocalISO] = useState("");
@@ -154,13 +193,25 @@ export default function DraftWithPresence() {
   const triedAutoRef = useRef(false);
   const [ clockNow, setClockNow] = useState(Date.now());
 
-  
+  //Live Listener
+  const [poolPlayers, setPoolPlayers] = useState([]);
+
+  useEffect(() => {
+    if (!roomId) {
+      setPoolPlayers([]);
+      return;
+    }
+    const ref = collection(db, "rooms", roomId, "players");
+    return onSnapshot(ref, (snap) => {
+      setPoolPlayers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [roomId]);
+
+  //Clock tick
   useEffect(() => {
     const id = setInterval(() => setClockNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-
-
 
   // Watch room doc (members live in the room doc's `members` array)
   useEffect(() => {
@@ -216,51 +267,91 @@ export default function DraftWithPresence() {
   // Create a room (host)
   async function createRoom() {
     if (!user) return alert("Sign in first");
-    const key = randomKey();
-    const ref = doc(db, "rooms", key);
-    if ((await getDoc(ref)).exists()) return alert("Key collision, try again");
+    if (creatingRoom) return;
 
-    const profile = await getUserProfile(user.uid).catch(() => null);
-    const displayName = profile?.displayName || user.displayName || user.email || "Host";
-    const initialMembers = [{ uid: user.uid, displayName }];
+    setCreatingRoom(true);
+    setSeedingPlayers(false);
 
-    await setDoc(ref, {
-      code: key,
-      name: "Friends Draft",
-      hostUid: user.uid,
-      members: initialMembers,           // array on room doc (live-watched)
-      turnIndex: 0,
-      totalRounds: 11,                       //Also Change this to stop cap of rounds  <--------------------
-      draftPlan: null,
-      started: false,
-      startAt: null,
-      turnDeadlineAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    //Send players
-    await seedRoomPlayers(key, MOCK_PLAYERS);
+    try {
+      const key = randomKey();
+      const ref = doc(db, "rooms", key);
+      if ((await getDoc(ref)).exists()) return alert("Key collision, try again");
 
-    // Convenience mirror (optional)
-    await setDoc(doc(db, "rooms", key, "members", user.uid), {
-      uid: user.uid,
-      displayName,
-      joinedAt: serverTimestamp(),
-    }, { merge: true });
+      const profile = await getUserProfile(user.uid).catch(() => null);
+      const displayName = profile?.displayName || user.displayName || user.email || "Host";
+      const initialMembers = [{ uid: user.uid, displayName }];
 
-    await setDoc(doc(db, "users", user.uid, "rooms", key), {
-      roomId: key,
-      code: key,
-      name: "Friends Draft",
-      hostUid: user.uid,
-      joinedAt: serverTimestamp(),
-      lastSeenAt: serverTimestamp(),
-    }, { merge: true });
+      await setDoc(ref, {
+        code: key,
+        name: "Friends Draft",
+        hostUid: user.uid,
+        members: initialMembers,
+        turnIndex: 0,
+        totalRounds: 11,
+        draftPlan: null,
+        started: false,
+        startAt: null,
+        turnDeadlineAt: null,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
-    setRoomKeyInput(key);
-    setRoomId(key);
-    
+      // hard-coded for now
+      const competition = { provider: "api-football", league: 2, season: 2025, timezone: "America/Los_Angeles" };
+      await updateDoc(doc(db, "rooms", key), { competition });
+
+      // Create the fast “mirrors” (these are quick)
+      await setDoc(
+        doc(db, "rooms", key, "members", user.uid),
+        { uid: user.uid, displayName, joinedAt: serverTimestamp() },
+        { merge: true }
+      );
+
+      await setDoc(
+        doc(db, "users", user.uid, "rooms", key),
+        {
+          roomId: key,
+          code: key,
+          name: "Friends Draft",
+          hostUid: user.uid,
+          joinedAt: serverTimestamp(),
+          lastSeenAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      // ✅ CONNECT IMMEDIATELY (this makes UI feel instant)
+      setRoomKeyInput(key);
+      setRoomId(key);
+
+      // ✅ seed players WITHOUT blocking UI
+      const tz = "America/Los_Angeles";
+      const fixtureDate = nextWeekdayISO(3, tz); // 3 = Wednesday
+
+      setSeedingPlayers(true);
+      const seedFn = httpsCallable(functions, "seedPlayersFromCompetition");
+      seedFn({
+        roomId: key,
+        league: 2,
+        season: 2025,
+        fixtureDate,          // ✅ NEW
+        timezone: tz,         // ✅ NEW
+        maxPagesPerTeam: 2,   // ✅ NEW (usually plenty)
+      })
+        .then(() => setSeedingPlayers(false))
+        .catch((e) => {
+          console.error(e);
+          setSeedingPlayers(false);
+          alert("Room created, but fetching players failed. Check Functions logs.");
+        });
+    } catch (e) {
+      console.error(e);
+      alert("Failed to create room. Check console for details.");
+    } finally {
+      setCreatingRoom(false);
+    }
   }
+
 
 
   // Join by code
@@ -401,16 +492,47 @@ export default function DraftWithPresence() {
   const requiredSlot = null;
 
   const [posFilterState, searchState] = [posFilter, search]; // just to keep deps short
-  const pickedIds = useMemo(() => new Set(picks.map(p => p.playerId)), [picks]);
+  const pickedIds = useMemo(() => new Set(picks.map(p => String(p.playerId))), [picks]);
+  const loadingPlayers = !!roomId && poolPlayers.length === 0;
+
+  // Put this ABOVE your availablePlayers useMemo
+  function normalizeDraftPos(pos) {
+    const p = String(pos || "").toUpperCase();
+
+    // API-Football often gives FWD/ST/CF etc — your draft only allows ATT/MID/DEF/GK
+    if (["FWD", "FW", "ST", "CF"].includes(p)) return "ATT";
+
+    if (["ATT"].includes(p)) return "ATT";
+    if (["MID", "MF", "CM", "CDM", "CAM", "LM", "RM"].includes(p)) return "MID";
+    if (["DEF", "DF", "CB", "LB", "RB", "LWB", "RWB"].includes(p)) return "DEF";
+    if (["GK", "GKP"].includes(p)) return "GK";
+
+    return p;
+  }
+
+  // If you have poolPlayers from Firestore, use them; otherwise fall back to MOCK_PLAYERS
+  const ALL_PLAYERS = (poolPlayers?.length ? poolPlayers : MOCK_PLAYERS).map((p) => ({
+    ...p,
+    id: String(p.id),
+    name: p.fullName ?? p.name ?? "",
+    position: normalizeDraftPos(p.position),
+  }));
+
   const availablePlayers = useMemo(() => {
     const q = searchState.trim().toLowerCase();
-    return MOCK_PLAYERS.filter(p => {
-      if (pickedIds.has(p.id)) return false;
-      if (posFilterState !== "ALL" && p.position !== posFilterState) return false;
-      if (q && !p.name.toLowerCase().includes(q)) return false;
-      return true;
-    });
-  }, [posFilterState, searchState, pickedIds]);
+
+    // show nothing until user types
+    if (!q) return [];
+
+    return ALL_PLAYERS
+      .filter((p) => {
+        if (pickedIds.has(p.id)) return false;
+        if (posFilterState !== "ALL" && p.position !== posFilterState) return false;
+        if (!p.name.toLowerCase().includes(q)) return false;
+        return true;
+      })
+      .slice(0, 10);
+  }, [ALL_PLAYERS, posFilterState, searchState, pickedIds]);
 
   const canPickNow = room?.started && currentPicker?.uid === user?.uid;
 
@@ -429,8 +551,14 @@ export default function DraftWithPresence() {
       await callMakePick({
         roomId,
         playerId: player.id,
-        position: player.position,
+        position: normalizeDraftPos(player.position),
         playerName: player.name,
+
+        apiPlayerId: player.apiPlayerId ?? player.id,
+        apiTeamId: player.apiTeamId ?? player.teamId,
+        teamName: player.teamName ?? "",
+
+        nationality: player.nationality ?? "",
       });
     } catch (e) {
       alert(e?.message || "Pick failed");
@@ -460,7 +588,11 @@ export default function DraftWithPresence() {
     const candidates = availablePlayers.map(p => ({
       id: p.id,
       name: p.name,
-      position: p.position,
+      position: normalizeDraftPos(p.position),
+      apiPlayerId: p.apiPlayerId ?? p.id,
+      apiTeamId: p.apiTeamId ?? p.teamId,
+      teamName: p.teamName ?? "",
+      nationality: p.nationality ?? "",
     }));
 
     if (!candidates.length) return;
@@ -521,9 +653,14 @@ export default function DraftWithPresence() {
         <div className="text-lg font-semibold mb-2">Create / Join a Room</div>
         <div className="grid gap-3 md:grid-cols-3">
           <div className="flex items-center gap-2">
-            <button onClick={createRoom} className="draftRoomBtn draftRoomBtnPrimary">
-              Create Room (Host)
+            <button
+              onClick={createRoom}
+              disabled={creatingRoom}
+              className="draftRoomBtn draftRoomBtnPrimary"
+            >
+              {creatingRoom ? "Creating Room..." : "Create Room (Host)"}
             </button>
+            {seedingPlayers && (<div className="text-sm opacity-70">Fetching players…</div>)}
             {room?.code && <div className="text-sm">Room Key: <b>{room.code}</b></div>}
           </div>
           <div className="flex items-center gap-2">
@@ -562,6 +699,11 @@ export default function DraftWithPresence() {
                 <Medal className="text-green-500 w-6 h-6" />
                 <h2 className="font-bold text-2xl text-slate-800">Waiting Room</h2>
               </div>
+              {seedingPlayers && (
+                <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+                  <b>Fetching players…</b> You can stay in the room while the player pool loads.
+                </div>
+              )}
             <div className="grid gap-6 lg:grid-cols-2">
               {/* Left: Room & Managers */}
               <Card className="bg-pitch text-line shadow-lg border border-goal min-h-[420px]">
@@ -640,7 +782,7 @@ export default function DraftWithPresence() {
                             const name = displayNameOf(m);
                             return (
                               <Avatar className="h-10 w-10 border-2 border-line/60">
-                                <AvatarImage src={p.photoURL || ""} alt={name} />
+                                <AvatarImage src={p.photoURL || undefined} alt={name} />
                                 <AvatarFallback className="bg-line text-pitch font-bold">
                                   {(name || "U").slice(0, 2).toUpperCase()}
                                 </AvatarFallback>
@@ -700,6 +842,7 @@ export default function DraftWithPresence() {
                       setStartLocalISO={setStartLocalISO}
                       scheduleStart={scheduleStart}
                       startNow={startNow}
+                      seedingPlayers={seedingPlayers}
                     />
                   ) : (
                     <p className="text-sm opacity-90">
@@ -729,7 +872,7 @@ export default function DraftWithPresence() {
                 <div className="draftTurnBanner">
                   <div className="draftTurnMain">
                     <Avatar className="draftTurnAvatar">
-                      <AvatarImage src={currentPhoto || ""} alt={currentName} />
+                      <AvatarImage src={currentPhoto || undefined} alt={currentName} />
                       <AvatarFallback className="draftTurnFallback">
                         {(currentName || "U").slice(0, 2).toUpperCase()}
                       </AvatarFallback>
@@ -745,7 +888,7 @@ export default function DraftWithPresence() {
                     <div className="draftTurnLabel">Next</div>
                     <div className="draftTurnNextRow">
                       <Avatar className="draftTurnAvatarSmall">
-                        <AvatarImage src={nextPhoto || ""} alt={nextName} />
+                        <AvatarImage src={nextPhoto || undefined} alt={nextName} />
                         <AvatarFallback className="draftTurnFallbackSmall">
                           {(nextName || "U").slice(0, 2).toUpperCase()}
                         </AvatarFallback>
@@ -776,6 +919,7 @@ export default function DraftWithPresence() {
               ) : currentPicker?.uid === user?.uid ? (
                 <PlayerPool
                   availablePlayers={availablePlayers}
+                  loadingPlayers={loadingPlayers}
                   posFilter={posFilter}
                   setPosFilter={setPosFilter}
                   search={search}
@@ -855,7 +999,7 @@ export default function DraftWithPresence() {
                 roomId={roomId}
                 user={user}
                 isHost={user?.uid === room?.hostUid}
-                players={MOCK_PLAYERS}
+                players={poolPlayers}
               />
             </div>
           )}
@@ -869,7 +1013,7 @@ export default function DraftWithPresence() {
 }
 
 // ----- Subcomponents -----
-function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow }) {
+function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow, seedingPlayers }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
       <input
@@ -878,29 +1022,46 @@ function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow
         value={startLocalISO}
         onChange={(e) => setStartLocalISO(e.target.value)}
       />
-      <button onClick={scheduleStart} className="draftRoomBtn draftRoomBtnAmber">
-        Schedule
+      <button onClick={scheduleStart} disabled={seedingPlayers} className="draftRoomBtn draftRoomBtnAmber">
+        {seedingPlayers ? "Fetching players..." : "Schedule"}
       </button>
-      <button onClick={startNow} className="draftRoomBtn draftRoomBtnPrimary">
-        Start Now
+      <button
+       onClick={startNow}
+       disabled={seedingPlayers}
+       className="draftRoomBtn draftRoomBtnPrimary">
+        {seedingPlayers ? "Fetching players..." : "Start Draft Now"}
       </button>
     </div>
   );
 }
 
-
-function PlayerPool({ availablePlayers, posFilter, setPosFilter, search, setSearch, onPick, requiredSlot }) {
+function PlayerPool({
+  availablePlayers,
+  loadingPlayers,         
+  posFilter,
+  setPosFilter,
+  search,
+  setSearch,
+  onPick,
+  requiredSlot,
+}) {
   return (
     <div className="rounded-2xl border border-slate-200 p-4 bg-white shadow-sm md:col-span-1">
       <div className="font-semibold mb-2">Player Pool</div>
+
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <select className="border px-3 py-2 rounded" value={posFilter} onChange={(e) => setPosFilter(e.target.value)}>
+        <select
+          className="border px-3 py-2 rounded"
+          value={posFilter}
+          onChange={(e) => setPosFilter(e.target.value)}
+        >
           <option value="ALL">All</option>
           <option value="ATT">ATT</option>
           <option value="MID">MID</option>
           <option value="DEF">DEF</option>
           <option value="GK">GK</option>
         </select>
+
         <input
           className="border px-3 py-2 rounded flex-1 min-w-[200px]"
           placeholder="Search player…"
@@ -908,33 +1069,53 @@ function PlayerPool({ availablePlayers, posFilter, setPosFilter, search, setSear
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
+
       <div className="text-xs opacity-70 mb-2">
-        Required this round: <b>{requiredSlot || "-"}</b>{requiredSlot === "SUB" ? " (any position allowed)" : ""}
+        Required this round: <b>{requiredSlot || "-"}</b>
+        {requiredSlot === "SUB" ? " (any position allowed)" : ""}
       </div>
+
       <div className="grid gap-2">
-        {availablePlayers.map((pl) => {
-          const blocked = requiredSlot && requiredSlot !== "SUB" && pl.position !== requiredSlot;
-          return (
-            <div key={pl.id} className="border rounded p-3 flex items-center justify-between">
-              <div>
-                <div className="font-semibold">{pl.name}</div>
-                <div className="text-xs opacity-70">{pl.position}</div>
-              </div>
-              <button
-                className="border px-3 py-1 rounded bg-black text-white disabled:opacity-50"
-                disabled={blocked}
-                onClick={() => onPick(pl)}
-                title={blocked ? `This round requires ${requiredSlot}` : "Pick"}
-              >
-                Pick
-              </button>
-            </div>
-          );
-        })}
-        {availablePlayers.length === 0 && (
-          <div className="opacity-60">No players match filters / all taken.</div>
+        {loadingPlayers ? (
+          <div className="opacity-70 p-2">Loading players from API…</div>
+        ) : (
+          <>
+            {availablePlayers.map((pl) => {
+              const blocked = requiredSlot && requiredSlot !== "SUB" && pl.position !== requiredSlot;
+
+              return (
+                <div key={pl.id} className="border rounded p-3 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">{pl.name}</div>
+
+                    {/* ✅ C: show nationality (country) */}
+                    <div className="text-xs opacity-70">
+                      {pl.position}
+                      {pl.nationality ? ` • ${pl.nationality}` : ""}
+                      {pl.teamName ? ` • ${pl.teamName}` : ""}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="border px-3 py-1 rounded bg-black text-white disabled:opacity-50"
+                    disabled={blocked}
+                    onClick={() => onPick(pl)}
+                    title={blocked ? `This round requires ${requiredSlot}` : "Pick"}
+                  >
+                    Pick
+                  </button>
+                </div>
+              );
+            })}
+
+            {availablePlayers.length === 0 && (
+              <div className="opacity-60">No players match filters / all taken.</div>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
+

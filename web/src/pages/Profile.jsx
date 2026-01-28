@@ -22,6 +22,7 @@ import {
   orderBy,
   setDoc,
   serverTimestamp,
+  deleteDoc,
 } from "firebase/firestore";
 import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
 import "./Profile.css";
@@ -48,6 +49,7 @@ export default function Profile() {
   const [rooms, setRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState("");
+  const [deletingRoomId, setDeletingRoomId] = useState("");
 
   // watch auth user
   useEffect(() => onAuthStateChanged(auth, setUser), []);
@@ -258,6 +260,28 @@ export default function Profile() {
     nav(`/draft?room=${roomId}`);
   }
 
+  async function deleteRoomFromMyList(roomId, roomName) {
+    if (!user?.uid || !roomId) return;
+
+    const ok = window.confirm(
+      `Remove "${roomName || roomId}" from your rooms list?\n\nThis only removes it from YOUR list. It does not delete the room for other people.`
+    );
+    if (!ok) return;
+
+    setDeletingRoomId(roomId);
+    try {
+      // delete membership/history doc under the user
+      await deleteDoc(doc(db, "users", user.uid, "rooms", roomId));
+
+      // optional: optimistic UI update (snapshot will also handle it)
+      setRooms((prev) => prev.filter((r) => r.id !== roomId && (r.roomId || r.id) !== roomId));
+    } catch (e) {
+      alert(e?.message || "Failed to delete room from your list");
+    } finally {
+      setDeletingRoomId("");
+    }
+  }
+
   if (!user) {
     return (
       <div className="profilePage">
@@ -410,8 +434,18 @@ export default function Profile() {
                     type="button"
                     className="profileBtn profileBtnPrimary"
                     onClick={() => openRoom(r.id)}
+                    disabled={deletingRoomId === r.id}
                   >
                     Join
+                  </button>
+                  <button
+                    type="button"
+                    className="profileBtn profileBtnOutline"
+                    onClick={() => deleteRoomFromMyList(r.id, r.name)}
+                    disabled={deletingRoomId === r.id}
+                    style={{ borderColor: "crimson", color: "crimson" }} // quick “danger” look
+                  >
+                    {deletingRoomId === r.id ? "Deleting..." : "Delete"}
                   </button>
                 </div>
               </div>

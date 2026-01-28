@@ -300,6 +300,7 @@ function shuffleArray(arr) {
   return a;
 }
 
+
 export async function callMaybeStartDraft({ roomId }) {
   const roomRef = doc(db, "rooms", roomId);
   await runTransaction(db, async (tx) => {
@@ -361,14 +362,29 @@ export async function callStartDraftNow({ roomId }) {
   return { ok: true };
 }
 
-export async function callMakePick({ roomId, playerId, position, playerName }) {
+function normalizePos(pos) {
+  const p = String(pos || "").toUpperCase();
+  if (p === "FWD") return "ATT";
+  return p;
+}
+
+export async function callMakePick({
+  roomId,
+  playerId,
+  position,
+  playerName,
+  apiPlayerId,
+  apiTeamId,
+  teamName,
+  nationality,
+}) {
   const user = requireUser();
 
   const allowedPositions = new Set(["ATT", "MID", "DEF", "GK"]);
-  const pos = String(position || "").toUpperCase();
+  const pos = normalizePos(position);
   if (!allowedPositions.has(pos)) throw new Error("Position must be one of ATT, MID, DEF, GK");
-  const pid = String(playerId);
 
+  const pid = String(playerId);
   const roomRef = doc(db, "rooms", roomId);
   const pickRef = doc(db, "rooms", roomId, "picks", pid);
 
@@ -378,20 +394,21 @@ export async function callMakePick({ roomId, playerId, position, playerName }) {
     const room = roomSnap.data();
     if (!room.started) throw new Error("Draft has not started");
 
-    const order = (Array.isArray(room.draftOrder) && room.draftOrder.length)
-      ? room.draftOrder
-      : (Array.isArray(room.members) ? room.members : []);
+    const order =
+      (Array.isArray(room.draftOrder) && room.draftOrder.length)
+        ? room.draftOrder
+        : (Array.isArray(room.members) ? room.members : []);
+
     const n = order.length;
     if (n === 0) throw new Error("Room has no members");
 
-    const totalRounds = room.totalRounds ?? 9;            //Change (9) to add more or less players
+    const totalRounds = room.totalRounds ?? 9;
     const maxPicks = totalRounds * n;
     const turnIndex = Number.isFinite(room.turnIndex) ? room.turnIndex : 0;
     if (turnIndex >= maxPicks) throw new Error("All rounds completed");
 
     const roundIndex = Math.floor(turnIndex / n);
     const withinRound = turnIndex % n;
-    // snake order
     const orderIndex = (roundIndex % 2 === 0) ? withinRound : (n - 1 - withinRound);
     const picker = order[orderIndex];
     if (!picker?.uid) throw new Error("Invalid draft order");
@@ -400,7 +417,7 @@ export async function callMakePick({ roomId, playerId, position, playerName }) {
     const existingPick = await tx.get(pickRef);
     if (existingPick.exists()) throw new Error("Player already picked");
 
-    const displayName =
+    const pickerName =
       user.displayName ||
       (await getDisplayNameFallback(tx, user.uid)) ||
       "Manager";
@@ -411,13 +428,20 @@ export async function callMakePick({ roomId, playerId, position, playerName }) {
 
     tx.set(pickRef, {
       playerId: pid,
-      playerName: playerName || pid,
+      playerName: String(playerName || playerId),
       position: pos,
-      uid: user.uid,
-      displayName,
+
+      uid: picker.uid,
+      displayName: pickerName,
+
       turn: turnIndex + 1,
       round: roundIndex + 1,
       createdAt: serverTimestamp(),
+
+      ...(apiPlayerId != null ? { apiPlayerId: Number(apiPlayerId) } : {}),
+      ...(apiTeamId != null ? { apiTeamId: Number(apiTeamId) } : {}),
+      ...(teamName ? { teamName: String(teamName) } : {}),
+      ...(nationality ? { nationality: String(nationality) } : {}),
     });
 
     tx.update(roomRef, {
@@ -477,7 +501,9 @@ export async function callAutoPick({ roomId, candidates }) {
     if (!choice) throw new Error("Could not find a free player to auto-pick");
 
     const pid = String(choice.id);
-    const pos = String(choice.position || "SUB").toUpperCase();
+    const allowed = new Set(["ATT","MID","DEF","GK"]);
+    const pos = normalizePos(choice.position);
+
     const pickRef = doc(db, "rooms", roomId, "picks", pid);
 
     const pickerName =
@@ -498,6 +524,11 @@ export async function callAutoPick({ roomId, candidates }) {
       turn: turnIndex + 1,
       round: roundIndex + 1,
       createdAt: serverTimestamp(),
+
+      ...(choice.apiPlayerId != null ? { apiPlayerId: String(choice.apiPlayerId) } : {}),
+      ...(choice.apiTeamId != null ? { apiTeamId: String(choice.apiTeamId) } : {}),
+      ...(choice.teamName ? { teamName: String(choice.teamName) } : {}),
+      ...(choice.nationality ? { nationality: String(choice.nationality) } : {}),
     });
 
     tx.update(roomRef, {

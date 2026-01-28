@@ -22,7 +22,7 @@
 
 .tpRow {
   display: grid;
-  grid-template-columns: 1.5fr 0.6fr 0.7fr 0.8fr 0.6fr;
+  grid-template-columns: 1.5fr 0.7fr 0.6fr;
   gap: 10px;
   align-items: center;
   padding: 8px 10px;
@@ -41,4 +41,56 @@
   background: rgba(0,0,0,0.25);
   overflow: auto;
   max-height: 520px;
+}
+
+.tpHeaderRow { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.tpBtn { padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.15); background: white; cursor: pointer; }
+.tpFull { grid-column: 1 / -1; }
+
+.tpMatchup { display: grid; gap: 8px; margin-bottom: 12px; }
+.tpMatchRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+}
+.tpMatchFooter { opacity: 0.85; font-size: 0.95rem; }
+
+.tpBoard { display: grid; gap: 8px; }
+.tpBoardHead, .tpBoardRow {
+  display: grid;
+  grid-template-columns: 0.35fr 1.3fr 0.9fr 0.8fr 0.9fr;
+  gap: 10px;
+  align-items: center;
+}
+.tpBoardHead { font-weight: 700; opacity: 0.85; }
+.tpBoardRow {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.04);
+}
+
+.tpStandingsHead, .tpStandingsRow {
+  grid-template-columns: 0.35fr 1.3fr 0.4fr 0.4fr 0.4fr 0.8fr 0.9fr;
+}
+
+.tpLineups {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.tpLineupHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 10px 0 8px;
+  opacity: 0.95;
+}
+.tpLineupTotal { font-weight: 700; }
+
+@media (max-width: 900px) {
+  .tpGrid { grid-template-columns: 1fr; }
+  .tpLineups { grid-template-columns: 1fr; }
 }

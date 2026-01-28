@@ -1,6 +1,6 @@
 // web/src/pages/DraftSummary.jsx
 import { useEffect, useMemo, useState, useRef } from "react";
-import { auth, db, watchRoom, getLastRoomId } from "../firebase";
+import { auth, db, functions, watchRoom, getLastRoomId } from "../firebase";
 import {
   collection,
   onSnapshot,
@@ -13,13 +13,55 @@ import useUserProfiles from "../lib/useUserProfiles";
 import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
 import useTeamNames from "../lib/useTeamNames";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { Pencil } from "lucide-react";
+import { httpsCallable } from "firebase/functions";
+
 
 const DEFAULT_DRAFT_PLAN = ["ATT", "ATT", "MID", "MID", "DEF", "DEF", "GK", "SUB", "SUB"];
 const STARTING_CAP = 9;   
 
 function displayNameOf(m) {
   return m?.displayName || m?.uid || "User";
+}
+
+//Subs locked
+function useSubsLock(roomId, enabled) {
+  const [locked, setLocked] = useState(false);
+  const [livePlayers, setLivePlayers] = useState([]);
+
+  useEffect(() => {
+    if (!enabled || !roomId) {
+      setLocked(false);
+      setLivePlayers([]);
+      return;
+    }
+
+    let cancelled = false;
+    const fn = httpsCallable(functions, "getUserLockStatus");
+
+    async function run() {
+      try {
+        const res = await fn({ roomId });
+        if (cancelled) return;
+        setLocked(!!res.data.locked);
+        setLivePlayers(res.data.livePlayers || []);
+      } catch (e) {
+        // If the function errors, fail open (don’t lock)
+        if (!cancelled) {
+          setLocked(false);
+          setLivePlayers([]);
+        }
+      }
+    }
+
+    run();
+    const id = setInterval(run, 30000); // poll every 30s
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [roomId, enabled]);
+
+  return { locked, livePlayers };
 }
 
 export default function DraftSummary() {
@@ -42,15 +84,17 @@ export default function DraftSummary() {
   const [sortMode, setSortMode] = useState("order"); // 'order' | 'alpha'
 
   useEffect(() => {
-    if (!tradeRoomPath || !myUid) return;
+    if (!tradeRoomPath) return;
 
-    setDoc(
-      doc(db, "rooms", tradeRoomPath, "members", myUid),
-      { uid: myUid, lastSeenAt: serverTimestamp() },
-      { merge: true }
-    ).catch((e) => console.error("members mirror write failed:", e.code, e.message));
-  }, [tradeRoomPath, myUid]);
+    const q = query(
+      collection(db, "rooms", tradeRoomPath, "picks"),
+      orderBy("turn")
+    );
 
+    return onSnapshot(q, (snap) => {
+      setPicks(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    });
+  }, [tradeRoomPath]);
  
   // Persist last used room id for convenience
   useEffect(() => {
@@ -194,6 +238,7 @@ export default function DraftSummary() {
 
           <div className="flex items-center gap-2">
             <button
+            type="button"
               className="px-3 py-2 rounded border"
               onClick={() => {
                 const id = prompt("Enter room key to switch");
@@ -203,6 +248,7 @@ export default function DraftSummary() {
               Switch Room
             </button>
             <button
+            type="button"
               className="px-3 py-2 rounded border"
               onClick={() => {
                 if (!roomId) return;
@@ -269,6 +315,7 @@ export default function DraftSummary() {
             room={room}
             roomPath={tradeRoomPath}
             myUid={myUid}
+            
           />
         ))}
       </div>
@@ -319,11 +366,12 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
 
   // Lock editing when games are live (UI-only for now)
   const lineupLocked =
-    room?.gamesLive === true ||           // 👈 add this (your "game in progress" flag)
-    !!room?.lineupsLocked ||              // keep if you still want to use it later
+    room?.gamesLive === true ||          
+    !!room?.lineupsLocked ||             
     (room?.lineupLockAt && Date.now() >= Number(room.lineupLockAt));
 
-
+  const { locked: liveLocked, livePlayers } = useSubsLock(roomPath, isMe);
+  const lockedNow = lineupLocked || liveLocked;
   const [editing, setEditing] = useState(false);
   const [input, setInput] = useState(teamName || "");
 
@@ -355,6 +403,7 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
 
   const [lineupDoc, setLineupDoc] = useState(null);
   const [pendingIn, setPendingIn] = useState(null); // bench player picked to sub in
+  const didInitLineup = useRef(false);
 
   useEffect(() => {
     if (!roomPath || !manager?.uid) return;
@@ -381,43 +430,59 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
     return m;
   }, [orderedPicks]);
 
-  async function saveStarters(next) {
-    if (!isMe || lineupLocked) return;
+async function saveStarters(next) {
+  if (!isMe || lockedNow) return;
 
-    const clean = next.slice(0, STARTING_CAP);
+  const clean = (next || []).slice(0, STARTING_CAP);
+  
+  const startingXI = clean.map((k) => {
+    const p = pickByKey.get(k);
+    const rawPos = (p?.position || "MID").toUpperCase();
+    const normPos = rawPos === "ATT" ? "FWD" : rawPos;
 
-    const membersPath = `rooms/${roomId}/members/${myUid}`;
-    const lineupsPath = `rooms/${roomId}/lineups/${myUid}`;
+    return {
+      id: k,
+      name: p?.playerName || "",
+      position: normPos,
+      teamId: p?.teamId ?? p?.apiTeamId ?? null,
+      apiPlayerId: p?.apiPlayerId ?? null,
+    };
+  });
 
-    try {
-      // 1) Create/refresh member mirror doc
-      await setDoc(
-        doc(db, "rooms", roomPath, "members", myUid),
-        { uid: myUid, lastSeenAt: serverTimestamp() },
-        { merge: true }
-      );
-    } catch (e) {
-      console.error("[saveStarters] ❌ members write denied:", e.code, e.message);
-      throw e;
-    }
+  // 1) Ensure member mirror exists (helps your rules / membership logic)
+  await setDoc(
+      doc(db, "rooms", roomPath, "members", myUid),
+      { uid: myUid, lastSeenAt: serverTimestamp() },
+      { merge: true }
+    );
 
-    try {
-      // 2) Write lineup doc
-      await setDoc(
-        doc(db, "rooms", roomPath, "lineups", myUid),
-        { uid: myUid, starters: clean, updatedAt: serverTimestamp() },
-        { merge: true }
-      );
-    
-    } catch (e) {
-      console.error("[saveStarters] ❌ lineups write denied:", e.code, e.message);
-      throw e;
-    }
+    // 2) Write lineup
+    await setDoc(
+      doc(db, "rooms", roomPath, "lineups", myUid),
+      {
+        uid: myUid,
+        starters: clean,       // keep IDs for UI logic
+        startingXI,            // NEW: objects for tournament + API
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
   }
+
+  useEffect(() => {
+    if (!isMe || lockedNow) return;
+    if (lineupDoc) return;                 // already saved
+    if (didInitLineup.current) return;     // prevent double-write
+    if (!allKeys.length) return;
+
+    didInitLineup.current = true;
+    saveStarters(allKeys.slice(0, STARTING_CAP)); // writes the default XI/IX to Firestore
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMe, lockedNow, lineupDoc, allKeys]);
 
 
   function onSubInClick(benchKey) {
-    if (!isMe || lineupLocked) return;
+    if (!isMe || lockedNow) return;
 
     // tap again to cancel
     if (pendingIn === benchKey) {
@@ -437,7 +502,7 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
   }
 
   function onStarterClick(starterKey) {
-    if (!isMe || lineupLocked) return;
+    if (!isMe || lockedNow) return;
     if (!pendingIn) return; // user wants flow: pick SUB IN first
 
     const next = starters.map((k) => (k === starterKey ? pendingIn : k));
@@ -528,11 +593,20 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
 
       <div className="text-xs text-gray-500 mb-3">
         Picks: {picks.length} / {totalRounds}
+
         {isMe && (
-          <span className="ml-2">
-            • Starters {starters.length}/{STARTING_CAP}
-            {lineupLocked ? " (Locked)" : pendingIn ? " — pick a starter to replace" : ""}
-          </span>
+          <>
+            <span className="ml-2">
+              • Starters {starters.length}/{STARTING_CAP}
+              {lockedNow ? " (Locked)" : pendingIn ? " — pick a starter to replace" : ""}
+            </span>
+
+            {liveLocked && (
+              <div className="mt-2 text-xs text-red-600">
+                Subs locked (live match): {livePlayers.map((p) => p.name).join(", ")}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -540,10 +614,10 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
       <div className="grid grid-cols-2 gap-2 text-sm">
         {isMe ? (
           <>
-            <StarterBlock title="ATT" list={startersByPos.ATT} pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
-            <StarterBlock title="MID" list={startersByPos.MID} pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
-            <StarterBlock title="DEF" list={startersByPos.DEF} pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
-            <StarterBlock title="GK"  list={startersByPos.GK}  pendingIn={!!pendingIn} locked={lineupLocked} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="ATT" list={startersByPos.ATT} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="MID" list={startersByPos.MID} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="DEF" list={startersByPos.DEF} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="GK"  list={startersByPos.GK}  pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
 
             {/* SUB section becomes Bench */}
             <div className="col-span-2">
@@ -551,7 +625,7 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
                 title="SUB"
                 list={benchPicks}
                 pendingKey={pendingIn}
-                locked={lineupLocked}
+                locked={lockedNow}
                 onSubIn={onSubInClick}
                 keyOf={keyOf}
               />
@@ -638,7 +712,7 @@ function BenchBlock({ title, list, pendingKey, locked, onSubIn, keyOf }) {
 
               <button
                 type="button"
-                className={'border rounded px-2 py-1 text-xs ${locked ? "opacity-50 cursor-not-allowed" : ""} '}
+                className={`border rounded px-2 py-1 text-xs ${locked ? "opacity-50 cursor-not-allowed" : ""}`}
                 disabled={locked}
                 title={locked ? "Lineups locked while games are live" : "Move to starting lineup"}
                 onClick={() => onSubIn(k)}
