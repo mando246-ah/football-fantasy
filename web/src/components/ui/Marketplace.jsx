@@ -112,7 +112,7 @@ const AcquireSearch = React.memo(function AcquireSearch({
   return (
     <div className="w-full">
       <input
-        className="border rounded px-2 py-1 w-full"
+        className="marketInput"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         placeholder={`Search player to acquire (${label})…`}
@@ -120,11 +120,11 @@ const AcquireSearch = React.memo(function AcquireSearch({
       />
 
       {selected && (
-        <div className="text-xs opacity-70 mt-1">
+        <div className="marketHint">
           Selected: <b>{selected.name}</b> ({selected.position})
           <button
             type="button"
-            className="ml-2 underline"
+            className="marketLinkBtn"
             onClick={() => {
               setState({ ...state, wantId: "" });
               setSearch("");
@@ -136,14 +136,14 @@ const AcquireSearch = React.memo(function AcquireSearch({
       )}
 
       {!selected && results.length > 0 && (
-        <div className="border rounded mt-2 max-h-56 overflow-auto bg-white">
+        <div className="marketResults">
           {results.map((p) => {
             const taken = pickedSet?.has(String(p.id));
             return (
               <button
                 type="button"
                 key={p.id}
-                className="w-full text-left px-2 py-2 hover:bg-slate-100 disabled:opacity-50"
+                className="marketResultItem"
                 disabled={taken}
                 onClick={() => {
                   setState({ ...state, wantId: p.id });
@@ -434,15 +434,15 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
         <h2 className="text-xl font-bold">Marketplace</h2>
         <div className="text-sm">
           {market?.status === "open" ? (
-            <span className="px-2 py-1 rounded bg-green-100 text-green-700">Open • {countdown ?? "—"}</span>
+            <span className="marketBadge marketBadgeOpen">Open • {countdown ?? "—"}</span>
           ) : market?.status === "resolved" ? (
-            <span className="px-2 py-1 rounded bg-blue-100 text-blue-700">Resolved</span>
+            <span className="marketBadge marketBadgeResolved">Resolved</span>
           ) : scheduledAtMs && scheduledAtMs > Date.now() ? (
-            <span className="px-2 py-1 rounded bg-amber-100 text-amber-700">
+            <span className="marketBadge marketBadgeScheduled">
               Scheduled • {scheduledOpenCountdown.label}
             </span>
           ) : (
-            <span className="px-2 py-1 rounded bg-slate-100 text-slate-700">Closed</span>
+            <span className="marketBadge marketBadgeClosed">Closed</span>
           )}
         </div>
       </div>
@@ -490,7 +490,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
           </div>
           <div className="col-span-1">
             <label className="text-xs font-semibold block mb-1">Schedule start</label>
-            <input className="border rounded px-2 py-1 w-full" type="datetime-local" value={startISO} onChange={e=>setStartISO(e.target.value)} />
+            <input className="marketInput marketInputDate" type="datetime-local" value={startISO} onChange={e=>setStartISO(e.target.value)} />
           </div>
           <div className="marketHostActions">
             <button className="marketBtn marketBtnAmber" onClick={onSchedule}>Schedule</button>
@@ -514,9 +514,9 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
       {/* Available players */}
       <div className="mt-4">
         <div className="font-semibold mb-2">Available Players</div>
-        <div className="grid gap-2 md:grid-cols-3">
+        <div className="grid gap-2 md:grid-cols-3 marketAvailableList">
           {visibleUndrafted.map(p => (
-            <div key={p.id} className="border rounded p-2">
+            <div key={p.id} className="marketPlayerCard">
               <div className="font-medium">{p.name}</div>
               <div className="text-xs opacity-70">{p.position}</div>
             </div>
@@ -556,7 +556,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
         <div className="grid md:grid-cols-2 gap-3">
           {[{label:"Choice A", state: choiceA, set: setChoiceA},
             {label:"Choice B", state: choiceB, set: setChoiceB}].map(({label, state, set}) => (
-            <div key={label} className="border rounded p-3">
+            <div key={label} className="marketPanel">
               <div className="text-sm font-medium mb-2">{label}</div>
               <div className="marketChoiceRow">
                 <AcquireSearch
@@ -570,7 +570,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
                   disabled={!isEditing}
                 />
                 <span className="marketChoiceFor">for</span>
-                <select disabled={!isEditing} className="border rounded px-2 py-1 w-full" value={state.swapOutId} onChange={e=>set({...state, swapOutId:e.target.value})}>
+                <select disabled={!isEditing} className="marketSelect" value={state.swapOutId} onChange={e=>set({...state, swapOutId:e.target.value})}>
                   <option value="">— Select your player to release —</option>
                   {myRoster.map(p => <option key={p.playerId} value={p.playerId}>{p.playerName} ({p.position})</option>)}
                 </select>
@@ -603,12 +603,12 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
             <span className="opacity-70">Saving your interest…</span>
           )}
           {saveStatus === "saved" && (
-            <span className="text-green-600">
+            <span className="marketTextSuccess">
               ✓ Interest saved. You can edit until the market closes.
             </span>
           )}
           {saveStatus === "error" && (
-            <span className="text-red-600">
+            <span className="marketTextError">
               Failed to save interest. Please try again.
             </span>
           )}

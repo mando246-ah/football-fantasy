@@ -320,8 +320,7 @@ export default function Profile() {
           <button
             type="submit"
             disabled={saving || !name.trim()}
-            className="profileBtn profileBtnPrimary"
-            style={{ width: "100%" }}
+            className="profileBtn profileBtnPrimary profileBtnBlock"
           >
             {saving ? "Saving..." : "Save & Continue"}
           </button>
@@ -341,6 +340,7 @@ export default function Profile() {
 
             <div className="avatarControls">
               <input
+                className="profileFile"
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
                 onChange={(e) => setAvatarFile(e.target.files?.[0] || null)}
@@ -365,7 +365,7 @@ export default function Profile() {
         <section className="profileCard">
           <h2 className="profileTitle">Sign-in preference</h2>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <label className="profileCheckRow">
             <input
               type="checkbox"
               checked={remember}
@@ -374,7 +374,7 @@ export default function Profile() {
             <span>Keep me signed in on this device</span>
           </label>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div className="profileActionsRow">
             <button type="button" className="profileBtn profileBtnPrimary" onClick={onSaveRemember}>
               Save preference
             </button>
@@ -383,9 +383,9 @@ export default function Profile() {
             </button>
           </div>
 
-          {savedPref ? <div style={{ marginTop: 8, color: "#15803d", fontWeight: 700 }}>Saved!</div> : null}
+          {savedPref ? <div className="profileSaved">Saved!</div> : null}
 
-          <p className="hint" style={{ marginTop: 8 }}>
+          <p className="hint hintTop" >
             This applies on your next sign-in. Click “Apply now” to sign out so the change takes effect immediately.
           </p>
         </section>
@@ -398,7 +398,7 @@ export default function Profile() {
           </p>
 
           {roomsLoading ? <div>Loading rooms…</div> : null}
-          {roomsError ? <div style={{ color: "crimson" }}>{roomsError}</div> : null}
+          {roomsError ? <div className="profileError">{roomsError}</div> : null}
 
           {!roomsLoading && !roomsError && rooms.length === 0 ? (
             <div className="hint">
@@ -440,10 +440,10 @@ export default function Profile() {
                   </button>
                   <button
                     type="button"
-                    className="profileBtn profileBtnOutline"
+                    className="profileBtn profileBtnDanger"
                     onClick={() => deleteRoomFromMyList(r.id, r.name)}
                     disabled={deletingRoomId === r.id}
-                    style={{ borderColor: "crimson", color: "crimson" }} // quick “danger” look
+                    
                   >
                     {deletingRoomId === r.id ? "Deleting..." : "Delete"}
                   </button>

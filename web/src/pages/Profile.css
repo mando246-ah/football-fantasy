@@ -5,6 +5,9 @@
   display: grid;
   place-items: center;
   padding: 1.25rem;
+
+  color: var(--ff-text);
+  color-scheme: dark;
 }
 
 .profileWrap {
@@ -15,40 +18,57 @@
 }
 
 .profileCard {
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid var(--ff-border);
   border-radius: 1rem;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  background: var(--ff-surface);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
   padding: 1rem;
 }
 
 .profileTitle {
   font-size: 1.25rem;
-  font-weight: 800;
+  font-weight: 900;
   margin: 0 0 0.5rem;
 }
 
 .profileSub {
   font-size: 0.875rem;
-  opacity: 0.75;
+  color: var(--ff-muted);
   margin: 0 0 0.75rem;
 }
 
+/* Inputs */
 .profileInput {
   width: 100%;
-  border: 1px solid rgba(0,0,0,0.18);
-  border-radius: 0.75rem;
-  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--ff-border);
+  border-radius: 0.85rem;
+  padding: 0.7rem 0.85rem;
   margin-bottom: 0.75rem;
+  background: var(--ff-surface-2);
+  color: var(--ff-text);
 }
 
+.profileInput::placeholder {
+  color: var(--ff-muted);
+}
+
+.profileInput:focus {
+  outline: none;
+  border-color: rgba(34, 211, 238, 0.65);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.18);
+}
+
+/* Buttons */
 .profileBtn {
-  border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 0.75rem;
-  padding: 0.65rem 0.9rem;
-  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 0.85rem;
+  padding: 0.7rem 1rem;
+  font-weight: 800;
   cursor: pointer;
-  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ff-text);
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease, opacity 120ms ease;
 }
 
 .profileBtn:disabled {
@@ -56,26 +76,41 @@
   cursor: not-allowed;
 }
 
+.profileBtnBlock {
+  width: 100%;
+}
+
 .profileBtnPrimary {
-  background: #0f172a;
-  color: #fff;
+  border: 0;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.95), rgba(34, 211, 238, 0.9));
+  color: #0b0b10;
 }
 
 .profileBtnPrimary:hover {
-  background: #1e293b;
   transform: translateY(-1px);
-  box-shadow: 0 10px 18px rgba(2,6,23,0.18);
+  box-shadow: 0 14px 30px rgba(34, 211, 238, 0.14), 0 14px 30px rgba(168, 85, 247, 0.10);
 }
 
 .profileBtnOutline {
-  background: #fff;
-  color: #0f172a;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--ff-text);
 }
 
 .profileBtnOutline:hover {
-  background: #f1f5f9;
+  background: rgba(255, 255, 255, 0.08);
   transform: translateY(-1px);
-  box-shadow: 0 10px 18px rgba(2,6,23,0.10);
+}
+
+.profileBtnDanger {
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.55);
+  color: rgba(252, 165, 165, 0.95);
+}
+
+.profileBtnDanger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  transform: translateY(-1px);
 }
 
 /* Avatar upload */
@@ -91,9 +126,58 @@
   width: 100%;
 }
 
+/* Style native file picker button */
+.profileFile {
+  width: 100%;
+  color: var(--ff-muted);
+}
+
+.profileFile::file-selector-button {
+  margin-right: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ff-text);
+  cursor: pointer;
+}
+
+.profileFile::file-selector-button:hover {
+  background: rgba(255, 255, 255, 0.10);
+}
+
+/* Rows (replacing inline styles) */
+.profileCheckRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.profileActionsRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.profileSaved {
+  margin-top: 8px;
+  color: rgba(34, 197, 94, 0.95);
+  font-weight: 800;
+}
+
+.profileError {
+  color: rgba(239, 68, 68, 0.95);
+  font-weight: 800;
+}
+
 .hint {
   font-size: 0.75rem;
-  opacity: 0.7;
+  color: var(--ff-muted);
+}
+
+.hintTop {
+  margin-top: 8px;
 }
 
 /* Rooms list */
@@ -108,9 +192,10 @@
   gap: 0.75rem;
   align-items: center;
   justify-content: space-between;
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid var(--ff-border);
   border-radius: 0.9rem;
   padding: 0.75rem;
+  background: var(--ff-surface-2);
 }
 
 .roomInfo {
@@ -120,13 +205,13 @@
 }
 
 .roomName {
-  font-weight: 800;
+  font-weight: 900;
   line-height: 1.2;
 }
 
 .roomMeta {
   font-size: 0.85rem;
-  opacity: 0.75;
+  color: var(--ff-muted);
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -134,10 +219,11 @@
 
 .roomCode {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 999px;
   padding: 0.1rem 0.5rem;
-  background: #f8fafc;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .roomBadges {
@@ -148,16 +234,16 @@
 
 .badge {
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 800;
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.10);
-  background: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.22);
 }
 
-.badgeHost { background: #ecfeff; border-color: rgba(6,182,212,0.30); }
-.badgeLive { background: #dcfce7; border-color: rgba(22,163,74,0.30); }
-.badgePending { background: #fef9c3; border-color: rgba(202,138,4,0.30); }
+.badgeHost { background: rgba(34, 211, 238, 0.12); border-color: rgba(34, 211, 238, 0.35); }
+.badgeLive { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.35); }
+.badgePending { background: rgba(245, 158, 11, 0.12); border-color: rgba(245, 158, 11, 0.35); }
 
 .roomActions {
   display: flex;

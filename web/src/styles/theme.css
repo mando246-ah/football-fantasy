@@ -1,0 +1,32 @@
+:root {
+  --ff-bg: #060814;
+  --ff-bg2: #0b1024;
+
+  --ff-text: #f1f5f9;
+  --ff-muted: rgba(241, 245, 249, 0.72);
+
+  --ff-accent: #22d3ee;   /* cyan */
+  --ff-accent2: #a855f7;  /* purple */
+  --ff-warn: #f59e0b;
+  --ff-danger: #ef4444;
+
+  --ff-radius: 18px;
+  --ff-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow-x: hidden;
+
+  /* Dark theme background */
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(168,85,247,0.18), transparent 60%),
+    radial-gradient(900px 500px at 70% 10%, rgba(34,211,238,0.14), transparent 55%),
+    var(--ff-bg);
+
+  color: var(--ff-text);
+}

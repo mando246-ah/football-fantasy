@@ -283,7 +283,7 @@ export function watchRoom(roomId, cb) {
 /* =========================
    Draft helpers
    ========================= */
-const TURN_SECONDS = 30; // used for deadline; UI can show a small timer
+const TURN_SECONDS = 120; // used for deadline; UI can show a small timer
 const DEFAULT_DRAFT_PLAN = ["ATT", "ATT", "MID", "MID", "DEF", "DEF", "GK", "SUB", "SUB"];
 
 function requireUser() {

@@ -1,10 +1,10 @@
 // src/pages/TournamentPage/TournamentPage.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef} from "react";
 import { useParams, Link } from "react-router-dom";
 import { doc, onSnapshot } from "firebase/firestore";
 
 import { useTournament } from "../../tournament/hooks/useTournament";
-import { auth, db } from "../../firebase";
+import { app, auth, db } from "../../firebase";
 
 import "./TournamentPage.css";
 import { Avatar, AvatarImage, AvatarFallback } from "../../components/ui/avatar";
@@ -53,6 +53,20 @@ function UserChip({ user }) {
   );
 }
 
+// --- PASTE THIS AT THE TOP OF THE FILE (Outside the component) ---
+const SCORING_DISPLAY = [
+  { label: "Playing Time", detail: "1 pt (Appearance) + 1 pt (60+ mins)" },
+  { label: "Goals", detail: "GK/DEF: 6, MID: 5, FWD: 4" },
+  { label: "Assists", detail: "3 pts" },
+  { label: "Clean Sheet", detail: "GK/DEF: 4, MID: 1 (Min 60 mins)" },
+  { label: "Saves (GK)", detail: "1 pt every 3 saves" },
+  { label: "Goals Conceded", detail: "-1 pt every 2 goals (GK/DEF)" },
+  { label: "Penalties", detail: "Saved: +5, Missed: -2" },
+  { label: "Cards", detail: "Yellow: -1, Red: -3" },
+  { label: "Passing (Total)", detail: "GK: 30, DEF/MID: 25, FWD: 20 passes = 1 pt" },
+];
+
+
 export default function TournamentPage() {
   const { roomId } = useParams();
   const { loading, error, data } = useTournament(roomId);
@@ -68,10 +82,36 @@ export default function TournamentPage() {
   const [bootingWeek, setBootingWeek] = useState(false);
   const [bootWeekErr, setBootWeekErr] = useState(null);
   const [bootAttempted, setBootAttempted] = useState(false);
+  const [expandedPlayerId, setExpandedPlayerId] = useState(null);
+  const [showScoring, setShowScoring] = useState(false);
+
+  const togglePlayer = (pid) => {
+    setExpandedPlayerId(expandedPlayerId === pid ? null : pid);
+  };
 
   const createNextWeekFn = httpsCallable(functions, "createNextWeek");
+  const scoringRef = useRef(null);
 
+  useEffect(() => {
+    if (!showScoring) return;
 
+    const onMouseDown = (e) => {
+      if (scoringRef.current && !scoringRef.current.contains(e.target)) {
+        setShowScoring(false);
+      }
+    };
+
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") setShowScoring(false);
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [showScoring]);
   // Always run hooks (no conditional hooks)
   useEffect(() => {
     if (!roomId) {
@@ -150,6 +190,7 @@ export default function TournamentPage() {
   // ---------- UI guards (after hooks) ----------
   if (!roomId) {
     return (
+      <div className="tpPage">
       <div className="tpWrap">
         <h2 className="tpTitle">Tournament</h2>
         <p className="tpText">Join or create a room to get started.</p>
@@ -158,16 +199,32 @@ export default function TournamentPage() {
           <Link to="/">Go Home</Link>
         </div>
       </div>
+      </div>
     );
   }
 
-  if (loading) return <div className="tpWrap">Loading tournament…</div>;
+  if (loading) {
+    return (
+      <div className="tpPage">
+        <div className="tpCenter">
+        <div className="tpWrap tpCenter">
+          <div className="loader" aria-label="Loading tournament">
+            <div className="loader_cube loader_cube--color" />
+            <div className="loader_cube loader_cube--glowing" />
+          </div>
+        </div>
+        </div>
+      </div>
+    );
+  }
 
   if (error) {
     return (
-      <div className="tpWrap">
-        <h2 className="tpTitle">Tournament</h2>
-        <p className="tpText">Something went wrong: {String(error.message || error)}</p>
+      <div className="tpPage">
+        <div className="tpWrap">
+          <h2 className="tpTitle">Tournament</h2>
+          <p className="tpText">Something went wrong: {String(error.message || error)}</p>
+        </div>
       </div>
     );
   }
@@ -190,75 +247,250 @@ export default function TournamentPage() {
       totalFantasyPoints: 0,
     }));
 
-    return (
+    // ... (Keep all the logic above this line: const me = ..., const myTotal = ...)
+
+  // REPLACE THE FINAL RETURN WITH THIS:
+  return (
+    <div className="tpPage">
       <div className="tpWrap">
+        
+        {/* HEADER AREA */}
         <div className="tpHeaderRow">
           <div>
-            <h2 className="tpTitle">Tournament</h2>
+            {/* TITLE + POINTS BUTTON ROW */}
+              <h2 className="tpTitle">Tournament</h2>
+
+               <div className="tpHeaderActions" ref={scoringRef}>
+                <button
+                  type="button"
+                  className="tpScoringBtn"
+                  onClick={() => setShowScoring((v) => !v)}
+                  aria-expanded={showScoring}
+                  aria-haspopup="dialog"
+                >
+                  Scoring <span className={`tpCaret ${showScoring ? "open" : ""}`}>▾</span>
+                </button>
+
+                {showScoring && (
+                  <div className="tpScoringPopover" role="dialog" aria-label="Scoring rules">
+                    <div className="tpScoringTitle">Scoring</div>
+                    <ul className="tpScoringList">
+                      {SCORING_DISPLAY.map((r) => (
+                        <li key={r.label} className="tpScoringItem">
+                          <span className="tpScoringLabel">{r.label}</span>
+                          <span className="tpScoringDetail">{r.detail}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ROOM INFO */}
             <p className="tpText">
-              Room: <b>{roomId}</b> • Your Total: <b>0</b>
+              Room: <b>{roomId}</b>
+              {currentWeekIndex != null ? (
+                <> • Week: <b>{currentWeekIndex}</b></>
+              ) : null}
+              {" "}• Your Total: <b>{myTotal}</b>
             </p>
-            {!currentWeekIndex ? (
+
+            {weekDoc && (
               <p className="tpText">
-                {bootingWeek
-                  ? "Setting up Week 1…"
-                  : "Week hasn’t started yet — waiting for Week 1 to be created/computed."}
+                Window: <b>{fmtDT(weekDoc.startAtMs)}</b> → <b>{fmtDT(weekDoc.endAtMs)}</b>
+                {weekDoc.roundLabel ? (<> • Round: <b>{weekDoc.roundLabel}</b></>) : null}
               </p>
-            ) : null}
-
-            {bootWeekErr ? (
-              <p className="tpText" style={{ color: "crimson" }}>
-                Couldn’t create Week 1: {String(bootWeekErr.message || bootWeekErr)}
-              </p>
-            ) : null}
-
-            {bootWeekErr && isHost ? (
-              <button
-                type="button"
-                className="tpBtn"
-                onClick={() => {
-                  setBootAttempted(false);
-                  setBootWeekErr(null);
-                }}
-              >
-                Retry Week Setup
-              </button>
-            ) : null}
+            )}
           </div>
         </div>
 
-        <div className="tpCard tpFull">
-          <h3 className="tpCardTitle">Leaderboard</h3>
-          <div className="tpBoard">
-            <div className="tpBoardHead">
-              <span>#</span><span>Name</span><span>W/D/L</span><span>Match Pts</span><span>Total Fantasy</span>
-            </div>
-            {baseRows.map((row, idx) => (
-              <div key={row.userId} className="tpBoardRow">
-                <span>{idx + 1}</span>
-                <span className="tpBoardName">
-                  <UserChip
-                    user={
-                      userById[row.userId] || {
-                        userId: row.userId,
-                        name: row.name,       // already includes "Display — Team" in your baseRows
-                        photoURL: "",         // fallback will show initials if empty
-                      }
-                    }
-                  />
-                </span>
-
-                <span>0/0/0</span>
-                <span>0</span>
-                <span>0</span>
+        <div className="tpGrid">
+          
+          {/* LEADERBOARD CARD */}
+          <div className="tpCard tpFull">
+            <h3 className="tpCardTitle">Leaderboard</h3>
+            <div className="tpBoard">
+              <div className="tpBoardHead">
+                <span>#</span>
+                <span>Name</span>
+                <span>W/D/L</span>
+                <span>Match Pts</span>
+                <span>Total Fantasy</span>
               </div>
-            ))}
+
+              {(standingsRows.length ? standingsRows : boardRows).map((row, idx) => {
+                const isStand = !!row?.tablePoints || row?.wins !== undefined;
+                const name = row.name || nameById[row.userId] || row.userId;
+                const wdl = isStand ? `${row.wins ?? 0}/${row.draws ?? 0}/${row.losses ?? 0}` : (row.result || "—");
+                const matchPts = isStand ? (row.tablePoints ?? 0) : (row.matchPoints ?? 0);
+                const totalFantasy = isStand ? (row.totalFantasyPoints ?? 0) : (row.fantasyPoints ?? 0);
+
+                return (
+                  <div key={row.userId || idx} className="tpBoardRow">
+                    <span>{idx + 1}</span>
+                    <span><UserChip user={userById[row.userId] || { userId: row.userId, name }} /></span>
+                    <span>{wdl}</span>
+                    <span>{matchPts}</span>
+                    <span>{totalFantasy}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {String(weekResults?.status || "").toUpperCase() === "LIVE" ? (
+              <div className="tpText tpLiveHint" >
+                Live updating… (last update: {fmtDT(weekResults.computedAt)})
+              </div>
+            ) : null}
           </div>
+
+          {/* MATCHUP & LINEUPS CARD */}
+          <div className="tpCard tpFull">
+            <h3 className="tpCardTitle">Your Matchup</h3>
+            {!myMatchup ? (
+              <p className="tpText">No matchup yet.</p>
+            ) : (
+              <>
+                <div className="tpMatchup">
+                  <div className="tpMatchRow">
+                    <span>
+                      <UserChip user={userById[myMatchup.homeUserId] || { userId: myMatchup.homeUserId, name: myMatchup.homeUserId }} />
+                    </span>
+                    <span>{myMatchup.homeTotal}</span>
+                  </div>
+                  <div className="tpMatchRow">
+                    <span>
+                      <UserChip user={userById[myMatchup.awayUserId] || { userId: myMatchup.awayUserId, name: myMatchup.awayUserId }} />
+                    </span>
+                    <span>{myMatchup.awayTotal}</span>
+                  </div>
+                  <div className="tpMatchFooter">
+                    Result: <b>{myMatchup.homeUserId === me?.userId ? myMatchup.homeResult : myMatchup.awayResult}</b>
+                  </div>
+                </div>
+
+                <div className="tpLineups">
+                  {/* MY TEAM */}
+                  <div className="tpSide tpSideMe">
+                    <div className="tpLineupHead">
+                      <span className="tpLineupName">
+                        <UserChip user={userById[me?.userId] || { userId: me?.userId, name: me?.userId }} />
+                      </span>
+                      <span className="tpLineupTotal">{myTotal} pts</span>
+                    </div>
+
+                    <ul className="tpList">
+                      {(me?.starters || []).map((p) => {
+                        const entry = myBreakdown?.perPlayer?.[p.id];
+                        const pts = typeof entry === "number" ? entry : entry?.points ?? 0;
+                        const breakdown = typeof entry === "object" ? entry?.breakdown : {};
+                        const stats = typeof entry === "object" ? entry?.stats : {};
+                        const realTeamName = typeof entry === "object" ? entry?.realTeamName : "";
+                        const opponentName = typeof entry === "object" ? entry?.opponentName : "";
+                        const isOpen = expandedPlayerId === p.id;
+                        
+                        return (
+                          <li key={p.id} className={`tpRowWrap ${isOpen ? "tpRowOpen" : ""}`}>
+                            <div className="tpRow" onClick={() => togglePlayer(p.id)}>
+                              <div className="tpPlayerInfo">
+                                <span className="tpName">{p.name}</span>
+                              </div>
+                              <div className="tpMeta">{p.position}</div>
+                              <div className="tpPts">{pts} pts</div>
+                            </div>
+                            {isOpen && (
+                              <PlayerStatsCard 
+                                stats={stats} 
+                                breakdown={breakdown}
+                                teamName={realTeamName}
+                                opponentName={opponentName}
+                              />
+                            )}
+                          </li>
+                        );     
+                      })}
+                    </ul>
+                  </div>
+
+                  {/* OPPONENT TEAM */}
+                  <div className="tpSide">
+                    <div className="tpLineupHead">
+                      <span className="tpLineupName">
+                        <UserChip user={userById[opponentUid] || { userId: opponentUid, name: opponentUid }} />
+                      </span>
+                      <span className="tpLineupTotal">{oppTotal} pts</span>
+                    </div>
+
+                    <ul className="tpList">
+                      {(opponent?.starters || []).map((p) => {
+                        const entry = oppBreakdown?.perPlayer?.[p.id];
+                        const pts = typeof entry === "number" ? entry : entry?.points ?? 0;
+                        const breakdown = typeof entry === "object" ? entry?.breakdown : {};
+                        const stats = typeof entry === "object" ? entry?.stats : {};
+                        const realTeamName = typeof entry === "object" ? entry?.realTeamName : "";
+                        const opponentName = typeof entry === "object" ? entry?.opponentName : "";
+                        const isOpen = expandedPlayerId === p.id;
+
+                        return (
+                          <li key={p.id} className={`tpRowWrap ${isOpen ? "tpRowOpen" : ""}`}>
+                            <div className="tpRow" onClick={() => togglePlayer(p.id)}>
+                              <div className="tpPlayerInfo">
+                                <span className="tpName">{p.name}</span>
+                              </div>
+                              <div className="tpMeta">{p.position}</div>
+                              <div className="tpPts">{pts} pts</div>
+                            </div>
+                            {isOpen && (
+                              <PlayerStatsCard 
+                                stats={stats} 
+                                breakdown={breakdown}
+                                teamName={realTeamName}
+                                opponentName={opponentName}
+                              />
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* OTHER MATCHUPS CARD */}
+          <div className="tpCard tpFull">
+            <h3 className="tpCardTitle">Other Matchups</h3>
+            {!otherMatchups.length ? (
+              <p className="tpText">No other matchups.</p>
+            ) : (
+              <div className="tpMatchup">
+                {otherMatchups.map((m) => {
+                  const homeUser = userById[m.homeUserId] || { userId: m.homeUserId, displayName: nameById[m.homeUserId] || m.homeUserId };
+                  const awayUser = userById[m.awayUserId] || { userId: m.awayUserId, displayName: nameById[m.awayUserId] || m.awayUserId };
+
+                  return (
+                    <div key={`${m.homeUserId}-${m.awayUserId}`} className="tpMatchRow">
+                      <div className="tpMatchTeams">
+                        <UserChip user={homeUser} />
+                        <span className="tpVs">vs</span>
+                        <UserChip user={awayUser} />
+                      </div>
+                      <span className="tpMatchScore">
+                        {m.homeTotal} — {m.awayTotal}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
-    );
-  }
-
+  );
+}
 
   const me = users.find((u) => u.userId === myUid) || users[0];
   const myTotal = activeResults.teamScoresByUserId?.[me?.userId] ?? 0;
@@ -292,21 +524,11 @@ export default function TournamentPage() {
   const standingsRows = standingsDoc?.standings || [];
 
   return (
+    <div className="tpPage">
     <div className="tpWrap">
       <div className="tpHeaderRow">
-        <div>
+        <div className="tpHeaderLeft">
           <h2 className="tpTitle">Tournament</h2>
-          <p className="tpText">
-            Room: <b>{roomId}</b>
-            {currentWeekIndex != null ? (
-              <>
-                {" "}
-                • Week: <b>{currentWeekIndex}</b>
-              </>
-            ) : null}
-            {" "}
-            • Your Total: <b>{myTotal}</b>
-          </p>
 
           {weekDoc && (
             <p className="tpText">
@@ -320,7 +542,48 @@ export default function TournamentPage() {
             </p>
           )}
         </div>
+
+        <div className="tpHeaderRight" ref={scoringRef}>
+          <div className="tpHeaderRightTop">
+            <div className="tpRoomMeta">
+              Room: <b>{roomId}</b>
+              {currentWeekIndex != null ? (
+                <>
+                  {" "}
+                  • Week: <b>{currentWeekIndex}</b>
+                </>
+              ) : null}
+              {" "}
+              • Your Total: <b>{myTotal}</b>
+            </div>
+
+            <button
+              type="button"
+              className="tpScoringBtn"
+              onClick={() => setShowScoring((v) => !v)}
+              aria-expanded={showScoring}
+              aria-haspopup="dialog"
+            >
+              Scoring <span className={`tpCaret ${showScoring ? "open" : ""}`}>▾</span>
+            </button>
+          </div>
+
+          {showScoring && (
+            <div className="tpScoringPopover" role="dialog" aria-label="Scoring rules">
+              <div className="tpScoringTitle">Scoring</div>
+              <ul className="tpScoringList">
+                {SCORING_DISPLAY.map((r) => (
+                  <li key={r.label} className="tpScoringItem">
+                    <span className="tpScoringLabel">{r.label}</span>
+                    <span className="tpScoringDetail">{r.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
+    </div>
 
 <div className="tpGrid">
 <div className="tpCard tpFull">
@@ -354,7 +617,7 @@ export default function TournamentPage() {
   </div>
 
   {String(weekResults?.status || "").toUpperCase() === "LIVE" ? (
-    <div className="tpText" style={{ marginTop: 10, opacity: 0.75 }}>
+    <div className="tpText tpLiveHint" >
       Live updating… (last update: {fmtDT(weekResults.computedAt)})
     </div>
   ) : null}
@@ -398,13 +661,44 @@ export default function TournamentPage() {
             {(me?.starters || []).map((p) => {
               const entry = myBreakdown?.perPlayer?.[p.id];
               const pts = typeof entry === "number" ? entry : entry?.points ?? 0;
+              const breakdown = typeof entry === "object" ? entry?.breakdown : {};
+              const stats = typeof entry === "object" ? entry?.stats : {};
+              const realTeamName = typeof entry === "object" ? entry?.realTeamName : "";
+              const opponentName = typeof entry === "object" ? entry?.opponentName : "";
+              const isOpen = expandedPlayerId === p.id;
+              
               return (
-                <li key={p.id} className="tpRow">
-                  <span className="tpName">{p.name}</span>
-                  <span className="tpMeta">{p.position}</span>
-                  <span className="tpPts">{pts} pts</span>
+                <li key={p.id} className={`tpRowWrap ${isOpen ? "tpRowOpen" : ""}`}>
+                  <div className="tpRow" onClick={() => togglePlayer(p.id)}>
+                    
+                    {/* 1. CLEAN ROW: Just the Name */}
+                    <div className="tpPlayerInfo">
+                      <span className="tpName">{p.name}</span>
+                    </div>
+
+                    {/* 2. Position Pill */}
+                    <div className="tpMeta">
+                      {p.position}
+                    </div>
+
+                    {/* 3. Points */}
+                    <div className="tpPts">
+                      {pts} pts
+                    </div>
+                  </div>
+                  
+                  {/* 4. PASS DATA TO CARD */}
+                  {isOpen && (
+                    <PlayerStatsCard 
+                      stats={stats} 
+                      breakdown={breakdown}
+                      teamName={realTeamName}       // <--- NEW PROP
+                      opponentName={opponentName}   // <--- NEW PROP
+                    />
+                  )}
                 </li>
               );
+                          
             })}
           </ul>
         </div>
@@ -421,11 +715,41 @@ export default function TournamentPage() {
             {(opponent?.starters || []).map((p) => {
               const entry = oppBreakdown?.perPlayer?.[p.id];
               const pts = typeof entry === "number" ? entry : entry?.points ?? 0;
+              const breakdown = typeof entry === "object" ? entry?.breakdown : {};
+              const stats = typeof entry === "object" ? entry?.stats : {};
+              const realTeamName = typeof entry === "object" ? entry?.realTeamName : "";
+              const opponentName = typeof entry === "object" ? entry?.opponentName : "";
+              const isOpen = expandedPlayerId === p.id;
+
               return (
-                <li key={p.id} className="tpRow">
-                  <span className="tpName">{p.name}</span>
-                  <span className="tpMeta">{p.position}</span>
-                  <span className="tpPts">{pts} pts</span>
+                <li key={p.id} className={`tpRowWrap ${isOpen ? "tpRowOpen" : ""}`}>
+                  <div className="tpRow" onClick={() => togglePlayer(p.id)}>
+                    
+                    {/* 1. CLEAN ROW: Just the Name */}
+                    <div className="tpPlayerInfo">
+                      <span className="tpName">{p.name}</span>
+                    </div>
+
+                    {/* 2. Position Pill */}
+                    <div className="tpMeta">
+                      {p.position}
+                    </div>
+
+                    {/* 3. Points */}
+                    <div className="tpPts">
+                      {pts} pts
+                    </div>
+                  </div>
+                  
+                  {/* 4. PASS DATA TO CARD */}
+                  {isOpen && (
+                    <PlayerStatsCard 
+                      stats={stats} 
+                      breakdown={breakdown}
+                      teamName={realTeamName}       // <--- NEW PROP
+                      opponentName={opponentName}   // <--- NEW PROP
+                    />
+                  )}
                 </li>
               );
             })}
@@ -477,6 +801,67 @@ export default function TournamentPage() {
 </div>
 
   </div>
+    </div>
+  );
+}
+
+function PlayerStatsCard({ stats, breakdown, teamName, opponentName }) {
+  if (!stats) return null;
+  
+  const labels = {
+    minutes: "Mins", goals: "Goals", assists: "Assists", 
+    passesCompleted: "Passes", saves: "Saves", goalsConceded: "Conceded",
+    yellow: "Yellow", red: "Red", cleanSheet: "Clean Sheet", sixtyPlus: "60+ Mins", appearance: "Appearance",
+  };
+
+  return (
+    <div className="tpStatsCard">
+      
+      {/* --- NEW: MATCH HEADER INSIDE DROPDOWN --- */}
+      {(teamName || opponentName) && (
+        <div className="tpCardHeader">
+          <span className="tpCardTeam">{teamName}</span>
+          {opponentName && (
+             <span className="tpCardVs">vs {opponentName}</span>
+          )}
+        </div>
+      )}
+      {/* ----------------------------------------- */}
+
+      <div className="tpStatsGrid">
+        {/* RAW STATS COLUMN */}
+        <div className="tpStatsCol">
+          <span className="tpStatsHead">Raw Stats</span>
+          {Object.entries(stats).map(([k, v]) => {
+            if (!v && v !== 0) return null;
+            if (v === false) return null;
+            if (k === "minutes" && v === 0) return null;
+            if (!labels[k]) return null;
+            return (
+              <div key={k} className="tpStatRow">
+                <span>{labels[k]}</span>
+                <span>{String(v)}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* POINTS BREAKDOWN COLUMN */}
+        <div className="tpStatsCol">
+          <span className="tpStatsHead">Points</span>
+          {Object.entries(breakdown || {}).map(([k, v]) => (
+            <div key={k} className="tpStatRow">
+              <span>{labels[k] || k}</span>
+              <span className={v > 0 ? "tpPos" : "tpNeg"}>
+                {v > 0 ? "+" : ""}{v}
+              </span>
+            </div>
+          ))}
+          {Object.keys(breakdown || {}).length === 0 && (
+            <div className="tpStatRow"><span>Base</span><span>0</span></div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

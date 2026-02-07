@@ -24,6 +24,10 @@ import {
 } from "./firebase";
 import TournamentPage from "./pages/TournamentPage/TournamentPage";
 import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
+import logo from "./assets/logo.png";
+import { useLocation, Outlet } from "react-router-dom";
+import "./styles/appShell.css";
+
 
 function Nav({ user, displayName, photoURL }) {
   const [lastRoomId, setLastRoomIdState] = useState(() => getLastRoomId());
@@ -70,12 +74,16 @@ function Nav({ user, displayName, photoURL }) {
   );
 
   return (
-    <header className="sticky top-0 z-50 bg-white/90 backdrop-blur border-b border-gray-200">
-      <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
-        <Link to="/" className="font-bold text-lg whitespace-nowrap">
-          ⚽ Football Fantasy
+    <header className="ff-nav">
+      <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
+        <Link to="/" className="flex items-center gap-3 font-bold text-xl whitespace-nowrap">
+          <img
+            src={logo}
+            alt="Football Fantasy"
+            className="h-12 w-16 object-contain shrink-0"
+          />
+          <span>Football Fantasy</span>
         </Link>
-
         {/* Desktop nav */}
         <nav className="hidden md:flex items-center gap-4 text-sm">
           {visibleTabs.map((t) => {
@@ -135,7 +143,7 @@ function Nav({ user, displayName, photoURL }) {
 
         {/* Mobile menu button */}
         <button
-          className="md:hidden px-3 py-2 rounded-lg border bg-white"
+          className="md:hidden px-3 py-2 rounded-lg border border-white/15 bg-white/10 text-white backdrop-blur"
           onClick={() => setOpen((v) => !v)}
           aria-expanded={open}
           aria-label="Toggle menu"
@@ -146,7 +154,7 @@ function Nav({ user, displayName, photoURL }) {
 
       {/* Mobile dropdown */}
       {open && (
-        <div className="md:hidden border-t border-gray-200 bg-white">
+        <div className="md:hidden border-t border-white/10 bg-black/60 text-white backdrop-blur">
           <div className="px-4 py-3 flex flex-col gap-3">
             {user && (
               <div className="flex items-center gap-2">
@@ -233,7 +241,7 @@ function SignIn() {
 
   return (
     <div className="min-h-[60vh] grid place-items-center p-6">
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 w-full max-w-md">
+      <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md shadow-lg p-6 w-full max-w-md text-white">
         <h1 className="text-xl font-bold mb-2">Sign in</h1>
         <p className="text-sm opacity-70 mb-4">Use a passwordless email link.</p>
         {!sent ? (
@@ -244,9 +252,9 @@ function SignIn() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
-              className="w-full border rounded px-3 py-2"
+              className="w-full rounded-xl border border-white/15 bg-black/30 px-3 py-2 text-white placeholder:text-white/40 outline-none focus:ring-2 focus:ring-cyan-400/40"
             />
-            <button type="submit" className="w-full px-3 py-2 rounded-xl border bg-black text-white">
+            <button type="submit" className="w-full px-3 py-2 rounded-xl border border-white/10 bg-gradient-to-r from-fuchsia-500/80 to-cyan-400/80 text-white hover:from-fuchsia-500 hover:to-cyan-400">
               Send magic link
             </button>
           </form>
@@ -260,6 +268,21 @@ function SignIn() {
     </div>
   );
 }
+
+function AppLayout({ user, displayName, photoURL }) {
+  const location = useLocation();
+  const isHome = location.pathname === "/";
+
+  return (
+    <div className="appShell theme-dark">
+      <Nav user={user} displayName={displayName} photoURL={photoURL} />
+      <main className={isHome ? "appMain appMain--full" : "appMain"}>
+        <Outlet />
+      </main>
+    </div>
+  );
+}
+
 
 // ---------- App ----------
 export default function App() {
@@ -284,56 +307,43 @@ export default function App() {
 
   return (
     <Router>
-      <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
-        <Nav user={user} displayName={displayName} photoURL={photoURL} />
-        <main className="flex-1 mx-auto w-full max-w-7xl p-4">
-          <Routes>
-            <Route path="/tournament" element={<RequireAuth user={user}><TournamentPage /></RequireAuth>} />
-            <Route
-              path="/tournament/:roomId"
-              element={
-                <RequireAuth user={user}>
-                  <TournamentPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/room"
-              element={
-                <RequireAuth user={user}>
-                  <DraftSummary />
-                </RequireAuth>
-              }
-            />
-            <Route path="/" element={<Home user={user} />} />
-            <Route path="*" element={<Home user={user} />} />
-            <Route
-              path="/signin"
-              element={user ? <Navigate to="/" replace /> : <SignIn />}
-            />
-            <Route
-              path="/profile"
-              element={
-                <RequireAuth user={user}>
-                  <Profile />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/draft"
-              element={
-                user && !displayName ? (
-                  <Navigate to="/profile" replace />
-                ) : (
-                  <RequireAuth user={user}>
-                    <Draft />
-                  </RequireAuth>
-                )
-              }
-            />
-          </Routes>
-        </main>
-      </div>
+      <Routes>
+        <Route element={<AppLayout user={user} displayName={displayName} photoURL={photoURL} />}>
+          <Route path="/" element={<Home user={user} />} />
+          <Route path="*" element={<Home user={user} />} />
+
+          <Route path="/signin" element={user ? <Navigate to="/" replace /> : <SignIn />} />
+
+          <Route path="/profile" element={
+            <RequireAuth user={user}>
+              <Profile />
+            </RequireAuth>
+          } />
+
+          <Route path="/draft" element={
+            user && !displayName ? (
+              <Navigate to="/profile" replace />
+            ) : (
+              <RequireAuth user={user}>
+                <Draft />
+              </RequireAuth>
+            )
+          } />
+
+          <Route path="/room" element={
+            <RequireAuth user={user}>
+              <DraftSummary />
+            </RequireAuth>
+          } />
+
+          <Route path="/tournament" element={
+            <RequireAuth user={user}><TournamentPage /></RequireAuth>
+          } />
+          <Route path="/tournament/:roomId" element={
+            <RequireAuth user={user}><TournamentPage /></RequireAuth>
+          } />
+        </Route>
+      </Routes>
     </Router>
   );
 }

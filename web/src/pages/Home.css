@@ -1,0 +1,217 @@
+.homePage {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.homeHeroFullBleed {
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+}
+
+.homeHero {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.homeHeroBg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+
+.homeHeroOverlay {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 40%, rgba(0,0,0,0.10), rgba(0,0,0,0.70));
+  pointer-events: none;
+}
+
+.homeHeroInner {
+  max-width: 980px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.homeKicker {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  color: rgba(255,255,255,0.70);
+}
+
+.homeSubtitle {
+  margin: 0;
+  max-width: 760px;
+  font-size: clamp(16px, 2.2vw, 24px);
+  line-height: 1.45;
+  color: rgba(255,255,255,0.88);
+  text-shadow: 0 10px 30px rgba(0,0,0,0.35);
+}
+
+.homeSubtitleAccent {
+  font-weight: 800;
+  color: rgba(255,255,255,1);
+}
+
+.homeMicro {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: rgba(255,255,255,0.65);
+}
+
+
+.homeHeroContent {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  text-align: center;
+  padding: 24px;
+  gap: 18px;
+}
+
+.homeTitle {
+  color: white;
+  font-size: clamp(28px, 4vw, 56px);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  margin: 0;
+  text-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+
+.homeHeroLogo {
+  width: clamp(150px, 30vw, 300px);
+  height: auto;
+  margin-bottom: 14px;
+  filter: drop-shadow(0 10px 30px rgba(0,0,0,0.55));
+}
+
+
+.homeTitleAccent {
+  font-weight: 800;
+}
+
+.homeButtons {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.homeBtn {
+  border: 0;
+  cursor: pointer;
+  padding: 12px 22px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 120ms ease, opacity 120ms ease;
+}
+
+.homeBtn:active {
+  transform: translateY(1px);
+}
+
+.homeBtnPrimary {
+  background: white;
+  color: #111;
+}
+
+.homeBtnGhost {
+  background: rgba(255,255,255,0.12);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.22);
+  backdrop-filter: blur(10px);
+}
+
+.homeBtn:hover {
+  opacity: 0.92;
+}
+
+/* LEARN MORE SECTION */
+.homeSection {
+  background: #0b0b10;
+  color: white;
+  padding: 72px 20px;
+}
+
+.homeSectionInner {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.homeSectionTitle {
+  margin: 0 0 10px;
+  font-size: 28px;
+}
+
+.homeSectionText {
+  margin: 0 0 28px;
+  opacity: 0.85;
+  max-width: 720px;
+}
+
+.homeFeatureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .homeFeatureGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.homeFeatureCard {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 18px;
+  padding: 16px;
+}
+
+.homeFeatureCard h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.homeFeatureCard p {
+  margin: 0;
+  opacity: 0.85;
+  font-size: 14px;
+}
+
+.homeSectionCtaRow {
+  margin-top: 26px;
+}
+
+
+.homeHeroBg,
+.homeHeroBg canvas {
+  pointer-events: auto;
+}
+
+.homeHeroContent {
+  pointer-events: none;
+}
+
+.homeHeroContent .homeBtn,
+.homeHeroContent .homeButtons {
+  pointer-events: auto;
+}

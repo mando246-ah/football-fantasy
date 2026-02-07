@@ -15,6 +15,10 @@ service cloud.firestore {
       return authed() &&
         exists(/databases/$(database)/documents/rooms/$(roomId)/members/$(request.auth.uid));
     }
+    function inUserRoom(roomId) {
+      return authed() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)/rooms/$(roomId));
+    }
 
 
     /* users */
@@ -34,15 +38,10 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /rooms/{roomId}/lineups/{uid} {
-   	 	allow read: if isRoomMember(roomId);
-
-      allow create, update: if isRoomMember(roomId)
-        && request.auth.uid == uid
-        && roomDoc(roomId).data.lineupsLocked != true;
-
+      allow read: if authed();
+      allow create, update: if authed() && request.auth.uid == uid;
       allow delete: if false;
- 		}
-
+    }
 
 
     /* rooms + subcollections */
@@ -65,6 +64,26 @@ service cloud.firestore {
       );
 
       allow delete: if false;
+      
+      // tournament weeks (created by Cloud Functions)
+        match /weeks/{weekId} {
+          allow read: if authed();
+          allow write: if false;
+        }
+        match /weekResults/{weekId} {
+          allow read: if authed();
+          allow write: if false;
+        }
+        match /standings/{docId} {
+          allow read: if authed();
+          allow write: if false;
+        }
+        match /roundResults/{roundId} {
+          allow read: if authed();
+          allow write: if false; // (Cloud Functions can still write via Admin SDK)
+        }
+
+
 
       // ✅ market doc (Marketplace.jsx reads: rooms/{roomId}/market/current)
       match /market/{docId} {
@@ -142,6 +161,3 @@ service cloud.firestore {
     }
   }
 }
-
-
-

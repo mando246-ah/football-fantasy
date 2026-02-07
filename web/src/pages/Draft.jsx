@@ -27,7 +27,6 @@ import {
 } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
-import WaitingRoom from "../components/ui/WaitingRoom";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 //import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -576,14 +575,25 @@ export default function DraftWithPresence() {
     return () => clearInterval(id);
   }, [room?.turnDeadlineAt, room?.turnIndex]);
 
+  const autoPickPool = useMemo(() => {
+    return ALL_PLAYERS.filter((p) => !pickedIds.has(p.id));
+  }, [ALL_PLAYERS, pickedIds]);
+
   // Host auto-pick when timer hits 0
   useEffect(() => {
     if (!room?.started || isDraftComplete) return;
-    if (timeLeft > 0 || triedAutoRef.current) return;
-    triedAutoRef.current = true;
-    if (!room?.hostUid) return;
 
-    const candidates = availablePlayers.map(p => ({
+    if (user?.uid !== room?.hostUid) return;
+
+    const deadlineMs = typeof room?.turnDeadlineAt === "number" ? room.turnDeadlineAt : null;
+    if (!deadlineMs) return;
+
+    // prevent early fire if host clock is ahead
+    if (Date.now() < deadlineMs) return;
+
+    if (triedAutoRef.current) return;
+
+    const candidates = autoPickPool.map((p) => ({
       id: p.id,
       name: p.name,
       position: normalizeDraftPos(p.position),
@@ -595,11 +605,20 @@ export default function DraftWithPresence() {
 
     if (!candidates.length) return;
 
+    triedAutoRef.current = true;
+
     (async () => {
-      try { await callAutoPick({ roomId, candidates }); }
-      catch (e) { console.warn("Auto-pick failed:", e?.message || e); }
+      try {
+        await callAutoPick({ roomId, candidates });
+      } catch (e) {
+        if (String(e?.message || "").includes("Deadline not reached")) {
+          triedAutoRef.current = false;
+        }
+        console.warn("Auto-pick failed:", e?.message || e);
+      }
     })();
-  }, [timeLeft, room?.started, isDraftComplete, user?.uid, room?.hostUid, roomId, availablePlayers, requiredSlot]);
+  }, [room?.started, room?.turnDeadlineAt, isDraftComplete, user?.uid, room?.hostUid, roomId, autoPickPool]);
+
 
   //User Picture 
   const memberUids = useMemo(() => {
@@ -644,17 +663,17 @@ export default function DraftWithPresence() {
 
   // ----- UI -----
   return (
-    <div className="min-h-screen w-full bg-gray-50">
-      <div className="mx-auto max-w-6xl lg:max-w-7xl px-4 md:px-6 py-6">
+    <div className="ff-page ff-page--dark draftPage">
+      <div className="ff-container">
       {/* Create / Join */}
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4 mb-4">
+      <div className="ff-panel ff-panel--pad draftSection">
         <div className="text-lg font-semibold mb-2">Create / Join a Room</div>
         <div className="grid gap-3 md:grid-cols-3">
           <div className="flex items-center gap-2">
             <button
               onClick={createRoom}
               disabled={creatingRoom}
-              className="draftRoomBtn draftRoomBtnPrimary"
+              className="ff-btn ff-btn--sm ff-btn--neon"
             >
               {creatingRoom ? "Creating Room..." : "Create Room (Host)"}
             </button>
@@ -663,12 +682,12 @@ export default function DraftWithPresence() {
           </div>
           <div className="flex items-center gap-2">
             <input
-              className="border px-3 py-2 rounded w-full"
+              className="ff-input roomKeyInput"
               placeholder="Enter room key"
               value={roomKeyInput}
               onChange={(e) => setRoomKeyInput(e.target.value.toUpperCase())}
             />
-            <button onClick={joinByCode} className="draftRoomBtn draftRoomBtnOutline">Join</button>
+            <button onClick={joinByCode} className="ff-btn ff-btn--sm ff-btn--neon">Join</button>
           </div>
           <div className="flex items-center gap-2">
             <div className="text-sm opacity-70">
@@ -695,7 +714,7 @@ export default function DraftWithPresence() {
               {/* Soccer-themed waiting room header */}
               <div className="flex items-center gap-2 mb-4">
                 <Medal className="text-green-500 w-6 h-6" />
-                <h2 className="font-bold text-2xl text-slate-800">Waiting Room</h2>
+                <h2 className="font-bold text-2xl text-white">Waiting Room</h2>
               </div>
               {seedingPlayers && (
                 <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
@@ -1016,17 +1035,17 @@ function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow
     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
       <input
         type="datetime-local"
-        className="border px-2 py-2 rounded w-full sm:w-auto"
+        className="ff-input draftScheduleInput"
         value={startLocalISO}
         onChange={(e) => setStartLocalISO(e.target.value)}
       />
-      <button onClick={scheduleStart} disabled={seedingPlayers} className="draftRoomBtn draftRoomBtnAmber">
+      <button onClick={scheduleStart} disabled={seedingPlayers} className="ff-btn ff-btn--warn">
         {seedingPlayers ? "Fetching players..." : "Schedule"}
       </button>
       <button
        onClick={startNow}
        disabled={seedingPlayers}
-       className="draftRoomBtn draftRoomBtnPrimary">
+       className="ff-btn ff-btn--primary">
         {seedingPlayers ? "Fetching players..." : "Start Draft Now"}
       </button>
     </div>

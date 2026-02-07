@@ -1,0 +1,41 @@
+/* src/styles/appShell.css */
+.appShell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.appMain {
+  flex: 1;
+  width: 100%;
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.appMain--full {
+  max-width: none;
+  padding: 0;
+}
+
+.ff-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+
+  background: rgba(10, 12, 22, 0.72);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+
+.ff-nav a {
+  color: rgba(255,255,255,0.70);
+}
+
+.ff-nav a:hover {
+  color: rgba(255,255,255,0.92);
+}
+
+.ff-nav a.active {
+  color: var(--ff-accent-cyan);
+}

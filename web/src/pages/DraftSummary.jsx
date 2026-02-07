@@ -14,10 +14,11 @@ import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
 import useTeamNames from "../lib/useTeamNames";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
+import "./DraftSummary.css";
 
 
 const DEFAULT_DRAFT_PLAN = ["ATT", "ATT", "MID", "MID", "DEF", "DEF", "GK", "SUB", "SUB"];
-const STARTING_CAP = 9;   
+const STARTING_CAP = 11;   
 
 function displayNameOf(m) {
   return m?.displayName || m?.uid || "User";
@@ -221,7 +222,7 @@ export default function DraftSummary() {
   const requiredSlot = perRoundPlan[roundNumber - 1] || null;
 
   return (
-    <div className="min-h-screen w-full p-4 md:p-6 bg-gray-50">
+    <div className="vrPage min-h-screen w-full p-4 md:p-6">
       {/* Header */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4 mb-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

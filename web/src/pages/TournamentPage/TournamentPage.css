@@ -1,394 +1,109 @@
 /* src/pages/TournamentPage/TournamentPage.css */
-.tpWrap { padding: 20px; }
-.tpTitle { margin: 0 0 10px; }
-.tpText { margin: 0 0 12px; }
-.tpLinks { display: flex; gap: 12px; }
 
-.tpGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
+/* Full page dark background */
+.tpPage{
+  min-height: calc(100dvh - 72px);
+  width: 100%;
+  color-scheme: dark;
+
+  background:
+    radial-gradient(1200px 700px at 20% 10%, rgba(168, 85, 247, 0.20), transparent 60%),
+    radial-gradient(1000px 650px at 80% 20%, rgba(34, 211, 238, 0.16), transparent 55%),
+    linear-gradient(180deg, #060712, #07081a 55%, #05060f);
 }
 
-.tpCard {
-  padding: 14px;
-  border: 1px solid rgba(255,255,255,0.14);
-  border-radius: 12px;
-}
-
-.tpCardTitle { margin: 0 0 10px; }
-
-.tpList { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-
-.tpRow {
-  display: grid;
-  grid-template-columns: 1.5fr 0.7fr 0.6fr;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.04);
-}
-
-.tpName { font-weight: 600; }
-.tpMeta { opacity: 0.85; font-size: 0.95rem; }
-.tpPts { text-align: right; font-weight: 700; }
-
-.tpPre {
-  margin: 0;
-  padding: 12px;
-  border-radius: 10px;
-  background: rgba(0,0,0,0.25);
-  overflow: auto;
-  max-height: 520px;
-}
-
-.tpHeaderRow { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.tpBtn { padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.15); background: white; cursor: pointer; }
-.tpFull { grid-column: 1 / -1; }
-
-.tpMatchup { display: grid; gap: 8px; margin-bottom: 12px; }
-.tpMatchRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.04);
-}
-.tpMatchFooter { opacity: 0.85; font-size: 0.95rem; }
-
-.tpBoard { display: grid; gap: 8px; }
-.tpBoardHead, .tpBoardRow {
-  display: grid;
-  grid-template-columns: 0.35fr 1.3fr 0.9fr 0.8fr 0.9fr;
-  gap: 10px;
-  align-items: center;
-}
-.tpBoardHead { font-weight: 700; opacity: 0.85; }
-.tpBoardRow {
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.04);
-}
-
-.tpStandingsHead, .tpStandingsRow {
-  grid-template-columns: 0.35fr 1.3fr 0.4fr 0.4fr 0.4fr 0.8fr 0.9fr;
-}
-
-.tpLineups {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-.tpLineupHead {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 10px 0 8px;
-  opacity: 0.95;
-}
-.tpLineupTotal { font-weight: 700; }
-
-@media (max-width: 900px) {
-  .tpGrid { grid-template-columns: 1fr; }
-  .tpLineups { grid-template-columns: 1fr; }
-}
-.tpWrap { max-width: 1100px; margin: 0 auto; }
-.tpCard { background: #fff; border: 1px solid #e5e7eb; box-shadow: 0 6px 18px rgba(0,0,0,0.06); }
-.tpBoardHead { color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
-.tpBoardRow { background: #f9fafb; border: 1px solid #eef2f7; }
-.tpBoardRow:hover { background: #f3f4f6; }
-.tpMuted { margin: 8px 0 0; color: #6b7280; }
-
-
-/* =========================
-   Head-to-head (Matchup) UI
-   ========================= */
-
-/* Make "tpFull" actually span full width inside tpGrid */
-.tpFull {
-  grid-column: 1 / -1;
-}
-
-/* Cards / layout tweaks for a clean white UI */
-.tpWrap {
+.tpWrap{
   max-width: 1100px;
   margin: 0 auto;
+  padding: 22px 16px 34px;
+  color: rgba(255,255,255,0.92);
 }
 
-.tpCard {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.06);
-}
-
-/* Score summary box (used in Your Matchup + Other Matchups) */
-.tpMatchup {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #f9fafb;
-  overflow: hidden;
-}
-
-.tpMatchRow {
-  display: flex;
-  align-items: center;
+.tpHeaderRow{
+  display:flex;
   justify-content: space-between;
+  align-items:flex-start;
   gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #e5e7eb;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
 }
 
-.tpMatchRow:last-child {
-  border-bottom: none;
-}
-
-.tpMatchRow span:last-child {
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-.tpMatchFooter {
-  padding: 10px 12px;
-  font-size: 0.95rem;
-  color: #6b7280;
-  border-top: 1px solid #e5e7eb;
-  background: #ffffff;
-}
-
-/* Two lineups side-by-side (me vs opponent) */
-.tpLineups {
-  margin-top: 14px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-@media (max-width: 900px) {
-  .tpLineups {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Lineup header (name + total pts) */
-.tpLineupHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #ffffff;
-  margin-bottom: 10px;
-}
-
-.tpLineupTotal {
-  font-weight: 900;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: #f3f4f6;
-  border: 1px solid #e5e7eb;
-  white-space: nowrap;
-}
-
-/* Player list rows (name / pos / pts) */
-.tpList {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 8px;
-}
-
-/* Override your earlier 5-col layout: this view is 3 columns */
-.tpRow {
-  display: grid;
-  grid-template-columns: 1fr 64px 86px;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: #ffffff;
-  border: 1px solid #eef2f7;
-}
-
-.tpRow:hover {
-  background: #f9fafb;
-}
-
-.tpName {
-  font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tpMeta {
-  text-align: center;
-  font-size: 0.85rem;
-  color: #6b7280;
-  border: 1px solid #e5e7eb;
-  background: #f3f4f6;
-  padding: 3px 8px;
-  border-radius: 999px;
-}
-
-.tpPts {
-  text-align: right;
-  font-weight: 900;
-  white-space: nowrap;
-}
-
-/* Other matchups: keep it compact */
-.tpCardTitle {
-  margin-bottom: 12px;
-}
-/* Highlight "my" lineup column */
-.tpSide {
-  border-radius: 14px;
-}
-
-.tpSideMe .tpLineupHead {
-  border-color: #c7d2fe;
-  background: #eef2ff;
-}
-
-.tpSideMe .tpRow {
-  border-color: #e0e7ff;
-}
-
-.tpSideMe .tpLineupTotal {
-  background: #e0e7ff;
-  border-color: #c7d2fe;
-}
-
-/* --- user chip (avatar + name + team name) --- */
-.tpUserChip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.tpAvatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 9999px;
-  overflow: hidden;
-  border: 1px solid rgba(0,0,0,0.12);
-  background: rgba(0,0,0,0.06);
-  flex: 0 0 auto;
-}
-
-.tpUserText {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  line-height: 1.1;
-}
-
-.tpUserName {
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tpUserTeam {
-  font-size: 0.85rem;
-  opacity: 0.75;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* --- lineup layout --- */
-.tpLineups {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-top: 12px;
-}
-
-.tpLineupHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.tpLineupTotal {
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-/* player rows (your list items) */
-.tpRow {
-  display: grid;
-  grid-template-columns: 1fr 70px 70px;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.04);
-}
-
-.tpMeta { text-align: center; }
-
-/* --- matchup rows (Other Matchups totals) --- */
-.tpMatchRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.04);
-}
-
-.tpMatchTeams {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.tpVs {
-  opacity: 0.6;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.tpMatchScore {
-  font-weight: 800;
-  white-space: nowrap;
-}
-
-/* responsive */
-@media (max-width: 900px) {
-  .tpGrid { grid-template-columns: 1fr; }
-  .tpLineups { grid-template-columns: 1fr; }
-}
-
-/* Make page title pop */
-.tpTitle {
+.tpTitle{
   font-size: 34px;
   font-weight: 900;
   letter-spacing: -0.02em;
   margin: 0 0 6px;
   line-height: 1.1;
-
-  background: linear-gradient(90deg, #2563eb, #7c3aed, #ef4444);
+  background: linear-gradient(90deg, rgba(168,85,247,0.95), rgba(34,211,238,0.90));
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
-.tpCardTitle {
+.tpText{
+  margin: 0 0 12px;
+  color: rgba(255,255,255,0.72);
+}
+
+.tpErr{
+  color: rgba(239,68,68,0.95);
+  font-weight: 800;
+}
+
+.tpLiveHint{
+  margin-top: 10px;
+  opacity: 0.75;
+}
+
+.tpLinks{
+  display:flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tpLinks a{
+  text-decoration: none;
+  display:inline-flex;
+  align-items:center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+}
+
+.tpLinks a:hover{
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(34,211,238,0.22);
+}
+
+/* Layout grid */
+.tpGrid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.tpFull{
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px){
+  .tpGrid{ grid-template-columns: 1fr; }
+}
+
+/* Cards */
+.tpCard{
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.45);
+}
+
+.tpCardTitle{
   font-size: 18px;
   font-weight: 900;
   letter-spacing: 0.02em;
@@ -397,76 +112,716 @@
   padding-bottom: 10px;
 }
 
-.tpCardTitle::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 56px;
-  height: 4px;
+.tpCardTitle::after{
+  content:"";
+  position:absolute;
+  left:0;
+  bottom:0;
+  width:56px;
+  height:4px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #2563eb, #7c3aed);
+  background: linear-gradient(90deg, rgba(168,85,247,0.95), rgba(34,211,238,0.90));
 }
 
-/* User chip (avatar + name + team) */
-.tpUserChip {
-  display: flex;
-  align-items: center;
+/* Buttons (Retry setup) */
+.tpBtn{
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.tpBtn:hover{
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(34,211,238,0.22);
+}
+
+/* Leaderboard table */
+.tpBoard{
+  display:grid;
+  gap: 8px;
+}
+
+.tpBoardHead,
+.tpBoardRow{
+  display:grid;
+  grid-template-columns: 0.35fr 1.3fr 0.9fr 0.8fr 0.9fr;
+  gap: 10px;
+  align-items:center;
+}
+
+.tpBoardHead{
+  font-weight: 900;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255,255,255,0.55);
+  padding: 0 10px;
+}
+
+.tpBoardRow{
+  padding: 10px 10px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+
+.tpBoardRow:hover{
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(34,211,238,0.22);
+}
+
+.tpBoardName{
+  display:flex;
+  align-items:center;
+  min-width: 0;
+}
+
+/* User chip */
+.tpUserChip{
+  display:flex;
+  align-items:center;
   gap: 10px;
   min-width: 0;
 }
 
-.tpAvatar {
+.tpAvatar{
   width: 34px;
   height: 34px;
   border-radius: 999px;
-  overflow: hidden;
-  border: 1px solid #e5e7eb;
-  background: #f1f5f9;
+  overflow:hidden;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(0,0,0,0.25);
   flex: 0 0 auto;
 }
 
-.tpAvatarImg {
-  width: 100%;
-  height: 100%;
+.tpAvatar img{
+  width:100%;
+  height:100%;
   object-fit: cover;
-  display: block;
+  display:block;
 }
 
-.tpAvatarFallback {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  font-weight: 900;
-  color: #334155;
-}
-
-.tpUserText {
-  display: flex;
+.tpUserText{
+  min-width:0;
+  display:flex;
   flex-direction: column;
+  line-height: 1.1;
+}
+
+.tpUserName{
+  font-weight: 900;
+  white-space: nowrap;
+  overflow:hidden;
+  text-overflow: ellipsis;
+}
+
+.tpUserTeam{
+  font-size: 0.85rem;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow:hidden;
+  text-overflow: ellipsis;
+}
+
+/* Matchups */
+.tpMatchup{
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 16px;
+  background: rgba(0,0,0,0.18);
+  overflow:hidden;
+}
+
+.tpMatchRow{
+  display:flex;
+  justify-content: space-between;
+  align-items:center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+
+.tpMatchRow:last-child{
+  border-bottom:none;
+}
+
+.tpMatchFooter{
+  padding: 10px 12px;
+  color: rgba(255,255,255,0.70);
+  border-top: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
+}
+
+.tpMatchTeams{
+  display:flex;
+  align-items:center;
+  gap: 10px;
   min-width: 0;
-  line-height: 1.15;
 }
 
-.tpUserName {
+.tpVs{
+  opacity: 0.65;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.tpMatchScore{
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* Lineups */
+.tpLineups{
+  margin-top: 14px;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 900px){
+  .tpLineups{ grid-template-columns: 1fr; }
+}
+
+.tpLineupHead{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 16px;
+  background: rgba(255,255,255,0.04);
+  margin: 10px 0 10px;
+}
+
+.tpLineupTotal{
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(0,0,0,0.25);
+  white-space: nowrap;
+}
+
+/* Optional highlight for "me" side */
+.tpSideMe .tpLineupHead{
+  border-color: rgba(168,85,247,0.35);
+  box-shadow: 0 0 0 3px rgba(168,85,247,0.10);
+}
+
+/* Player rows */
+.tpList{
+  list-style:none;
+  padding: 0;
+  margin: 0;
+  display:grid;
+  gap: 8px;
+}
+
+.tpRow {
+  display: grid;
+  grid-template-columns: 1fr 60px 80px; /* Adjusted widths */
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px; /* Slightly tighter padding */
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+.tpRow:hover{
+  background: rgba(255,255,255,0.08);
+  border-color: rgba(34,211,238,0.18);
+}
+
+.tpName{
   font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
+  overflow:hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tpUserMeta {
-  font-size: 12px;
-  color: #64748b;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.tpMeta{
+  text-align:center;
+  font-size: 0.85rem;
+  opacity: 0.85;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+  padding: 3px 8px;
+  border-radius: 999px;
 }
 
-/* Helps the leaderboard name column align nicely */
-.tpBoardName {
+.tpPts{
+  text-align:right;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+/* From Uiverse.io by mobinkakei */ 
+.loader {
+  width: 150px;
+  height: 150px;
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: center;
+}
+
+.loader_cube {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 30px;
+}
+
+.loader_cube--glowing {
+  z-index: 2;
+  background-color: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+.loader_cube--color {
+  z-index: 1;
+  filter: blur(2px);
+  background: linear-gradient(135deg, #1afbf0, #da00ff);
+  animation: loadtwo 2.5s ease-in-out infinite;
+}
+
+@keyframes loadtwo {
+  50% {
+    transform: rotate(-80deg);
+  }
+}
+
+.tpCenter {
+  min-height: 100vh;          
+  display: grid;
+  place-items: center;       
+}
+/* Wrapper for row + dropdown */
+.tpRowWrap{
+  display: flex;
+  flex-direction: column;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  overflow: hidden;
+  transition: background 0.2s;
+}
+
+.tpRowWrap.tpRowOpen{
+  background: rgba(255,255,255,0.07);
+  border-color: rgba(34,211,238,0.3);
+}
+
+/* The clickable header row */
+.tpRow{
+  /* Remove border/radius since the wrapper handles it now */
+  background: transparent; 
+  border: none;
+  cursor: pointer;
+}
+.tpRow:hover{ background: transparent; }
+
+/* The Dropdown Card */
+.tpStatsCard{
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding: 12px;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.tpStatsGrid{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  font-size: 0.85rem;
+}
+
+.tpStatsHead{
+  display: block;
+  font-weight: 900;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  opacity: 0.5;
+}
+
+.tpStatRow{
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.tpPos{ color: #4ade80; font-weight: bold; }
+.tpNeg{ color: #f87171; font-weight: bold; }
+
+/* src/pages/TournamentPage/TournamentPage.css */
+
+/* ... existing styles ... */
+
+.tpPlayerInfo {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   min-width: 0;
+  gap: 1px; /* Tighter gap between name/team/vs */
+}
+
+.tpName {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 2px; /* Slight space after name */
+}
+
+/* Base style for the stacked lines */
+.tpMatchLine {
+  font-size: 0.7rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.1;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Specific color for the player's team (Line 1) */
+.tpTeamName {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* Specific color for "vs Opponent" (Line 2) */
+.tpOpponentName {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.65rem; /* Slightly smaller */
+}
+
+/* src/pages/TournamentPage/TournamentPage.css */
+
+/* ... existing styles ... */
+
+/* New Header inside the Dropdown Card */
+.tpCardHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  gap: 2px;
+}
+
+.tpCardTeam {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.tpCardVs {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+}
+
+/* Ensure the main player info is centered vertically again */
+.tpPlayerInfo {
+  display: flex;
+  flex-direction: column;
+  justify-content: center; 
+}
+
+/* src/pages/TournamentPage/TournamentPage.css */
+
+/* 1. The "Points" Button */
+.tpPointsBtn {
+  background: rgba(34, 211, 238, 0.15); /* Cyan tint */
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  color: #22d3ee;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tpPointsBtn:hover {
+  background: rgba(34, 211, 238, 0.25);
+  transform: translateY(-1px);
+}
+
+/* 2. The Dropdown Container */
+.tpScoringDropdown {
+  position: absolute;
+  top: 110%; /* Right below the button */
+  left: 0;
+  width: 300px;
+  background: #1a1b26;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  z-index: 100; /* Float above everything */
+  animation: slideDown 0.2s ease-out;
+}
+
+/* 3. Header inside dropdown */
+.tpScoringHeader {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 4. Grid for the rules */
+.tpScoringGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tpScoringRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.tpRuleLabel {
+  color: rgba(255, 255, 255, 0.6);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.tpRuleDetail {
+  color: #fff;
+  font-weight: 600;
+  text-align: right;
+  max-width: 60%;
+}
+
+/* 5. Invisible Overlay to handle "Click Outside" */
+.tpScoringOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: -1; /* Behind the dropdown, but in front of page */
+  cursor: default;
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Header actions (top-right dropdown) */
+.tpHeaderActions{
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  min-width: 180px;
+}
+
+.tpScoringBtn{
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+  font-weight: 900;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tpScoringBtn:hover{
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(34,211,238,0.22);
+}
+
+.tpCaret{
+  display:inline-block;
+  transform: translateY(1px);
+  transition: transform 160ms ease;
+  opacity: 0.9;
+}
+.tpCaret.open{ transform: rotate(180deg) translateY(-1px); }
+
+.tpScoringPopover{
+  position: absolute;
+  right: 0;
+  top: 44px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  z-index: 50;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(10,12,22,0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.55);
+}
+
+.tpScoringTitle{
+  font-weight: 900;
+  margin-bottom: 10px;
+  letter-spacing: 0.02em;
+}
+
+.tpScoringList{
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.tpScoringItem{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.tpScoringLabel{
+  font-weight: 900;
+  color: rgba(255,255,255,0.92);
+}
+
+.tpScoringDetail{
+  color: rgba(255,255,255,0.70);
+  font-size: 0.9rem;
+}
+
+.tpHeaderLeft{
+  min-width: 280px;
+}
+
+.tpHeaderRight{
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.tpHeaderRightTop{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tpRoomMeta{
+  color: rgba(255,255,255,0.78);
+  margin: 0;
+  white-space: nowrap;
+}
+
+.tpScoringBtn{
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.92);
+  font-weight: 900;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tpScoringBtn:hover{
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(34,211,238,0.22);
+}
+
+.tpCaret{
+  display:inline-block;
+  transform: translateY(1px);
+  transition: transform 160ms ease;
+  opacity: 0.9;
+}
+.tpCaret.open{ transform: rotate(180deg) translateY(-1px); }
+
+.tpScoringPopover{
+  position: absolute;
+  right: 0;
+  top: 44px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  z-index: 50;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(10,12,22,0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.55);
+}
+
+.tpScoringTitle{
+  font-weight: 900;
+  margin-bottom: 10px;
+  letter-spacing: 0.02em;
+}
+
+.tpScoringList{
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.tpScoringItem{
+  display: grid;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.tpScoringLabel{
+  font-weight: 900;
+  color: rgba(255,255,255,0.92);
+}
+
+.tpScoringDetail{
+  color: rgba(255,255,255,0.70);
+  font-size: 0.9rem;
 }
