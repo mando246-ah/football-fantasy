@@ -345,6 +345,10 @@
 }
 
 .tpMeta{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   text-align:center;
   font-size: 0.85rem;
   opacity: 0.85;
@@ -824,4 +828,149 @@
 .tpScoringDetail{
   color: rgba(255,255,255,0.70);
   font-size: 0.9rem;
+}
+
+.tpLivePill{
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(34,211,238,0.35);
+  background: rgba(34,211,238,0.12);
+  color: rgba(34,211,238,0.95);
+}
+.tpLiveBadge {
+  color: #ef4444; /* Red color */
+  font-weight: 800;
+  font-size: 0.7rem;
+  margin-left: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tpLivePulse {
+  width: 6px;
+  height: 6px;
+  background-color: #ef4444;
+  border-radius: 50%;
+  animation: pulseRed 1.5s infinite;
+}
+
+.tpFinishedBadge {
+  color: #9ca3af; /* Gray */
+  font-size: 0.65rem;
+  margin-left: 4px;
+}
+
+@keyframes pulseRed {
+  0% { transform: scale(0.95); opacity: 1; }
+  50% { transform: scale(1.2); opacity: 0.7; }
+  100% { transform: scale(0.95); opacity: 1; }
+}
+.tpHeaderRight{
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.tpHeaderRightTop{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tpRoomMeta{
+  text-align: right;
+}
+
+.tpMeta{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;                 /* space between FWD and IDLE */
+
+  padding: 8px 45px;         /*  bigger pill */
+  min-height: 30px;          /*  consistent height */
+  border-radius: 999px;
+
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.22);
+
+  font-size: 12px;           /*  bigger text */
+  line-height: 1;
+  white-space: nowrap;       /*  never wrap inside pill */
+}
+
+/* status is just colored text inside the same pill */
+.tpLivePill{
+  background: transparent;
+  border: 0;
+  padding: 0;
+
+  font-size: 12px;           /*  slightly smaller than position */
+  font-weight: 900;
+  letter-spacing: .10em;
+  line-height: 1;
+  white-space: nowrap;       /*  keep IDLE on one line */
+}
+
+.tpLivePill.live{ color: rgba(34,211,238,0.95); }
+.tpLivePill.idle{ color: rgba(255,255,255,0.75); }
+
+/* Host Tools dropdown */
+.tpTools {
+  position: relative;
+  display: inline-block;
+  margin-left: 8px;
+}
+
+.tpTools summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.tpTools summary::-webkit-details-marker {
+  display: none;
+}
+
+.tpToolsMenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 190px;
+  padding: 8px;
+  border-radius: 12px;
+  z-index: 50;
+
+  background: rgba(15, 18, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.tpToolsItem {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font-weight: 600;
+}
+
+.tpToolsItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.tpToolsItem:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

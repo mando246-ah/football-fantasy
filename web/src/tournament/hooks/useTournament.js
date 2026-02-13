@@ -131,7 +131,18 @@ export function useTournament(roomId) {
         // 1) Room doc (allowed: authed read)
         const roomSnap = await getDoc(doc(db, "rooms", roomId));
         if (!roomSnap.exists()) throw new Error(`Room ${roomId} not found`);
-        const room = roomSnap.data() || {};
+        const roomRaw = roomSnap.data() || {};
+
+        // Step #3: prefer room.competitionState, fall back to legacy fields
+        const competitionState = roomRaw.competitionState || {
+          currentWeekIndex: roomRaw.currentWeekIndex ?? null,
+          currentLabel: null,
+          phaseLabel: null,
+          weekStatus: null,
+          isDone: false,
+        };
+
+        const room = { ...roomRaw, competitionState };
         const roundId = Number(room.currentRound ?? room.roundId ?? 1);
 
         // 2) Membership check (your membership model)

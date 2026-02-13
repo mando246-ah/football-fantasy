@@ -5,6 +5,9 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 admin.initializeApp();
 const db = admin.firestore();
 
+// Week fixture lock: safety buffer so postponed matches don't keep a week open forever.
+const HARD_END_BUFFER_MS = 24 * 60 * 60 * 1000; // 24h
+
 //API
 const { defineSecret } = require("firebase-functions/params");
 const APIFOOTBALL_KEY = defineSecret("APIFOOTBALL_KEY");
@@ -34,6 +37,39 @@ function isHost(room, uid) {
   return !!room?.hostUid && room.hostUid === uid;
 }
 
+function derivePhaseLabel(roundLabel) {
+  const s = String(roundLabel || "").toLowerCase();
+  if (!s) return null;
+
+  // Simple normalization for display (can be expanded later)
+  if (s.includes("group")) return "Group Stage";
+  if (s.includes("league phase") || s.includes("league")) return "League Phase";
+  if (s.includes("play-off") || s.includes("playoff")) return "Playoffs";
+  if (s.includes("round of 32") || s.includes("32")) return "Round of 32";
+  if (s.includes("round of 16") || s.includes("16")) return "Round of 16";
+  if (s.includes("quarter")) return "Quarter-finals";
+  if (s.includes("semi")) return "Semi-finals";
+  if (s.includes("final")) return "Final";
+  if (s.includes("regular season")) return "Regular Season";
+  return roundLabel; // fallback to raw label
+}
+
+function buildCompetitionStateUpdate({ weekIndex, label, weekStatus, isDone }) {
+  return {
+    competitionState: {
+      currentWeekIndex: Number(weekIndex),
+      currentLabel: label ?? null,
+      phaseLabel: derivePhaseLabel(label) ?? null,
+      weekStatus: weekStatus ?? null,
+      isDone: Boolean(isDone),
+      updatedAtMs: Date.now(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+  };
+}
+
+
+
 //Tournament 
 function toPos(pos) {
   const p = String(pos || "").toUpperCase();
@@ -59,7 +95,7 @@ function normalizePlayer(raw) {
 }
 
 exports.seedPlayersFromCompetition = onCall(
-  { region: "us-west2", secrets: [APIFOOTBALL_KEY] },
+  { region: "us-west2", secrets: [APIFOOTBALL_KEY], timeoutSeconds: 540, memory: "1GiB" },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
@@ -74,8 +110,13 @@ exports.seedPlayersFromCompetition = onCall(
     const timezone = String(request.data?.timezone ?? "America/Los_Angeles");
 
     // Safety caps
-    const maxPages = Math.max(1, Math.min(50, Number(request.data?.maxPages ?? 5))); // league paging mode
-    const maxPagesPerTeam = Math.max(1, Math.min(10, Number(request.data?.maxPagesPerTeam ?? 4))); // fixture-date mode
+    // Target cap (hard limit)
+    const maxPlayers = Math.max(1, Math.min(1500, Number(request.data?.maxPlayers ?? 1500)));
+
+    // Safety caps (still keep guardrails, but allow enough pages to hit 1500)
+    const maxPages = Math.max(1, Math.min(250, Number(request.data?.maxPages ?? 200))); // league paging mode
+    const maxPagesPerTeam = Math.max(1, Math.min(20, Number(request.data?.maxPagesPerTeam ?? 10))); // fixture-date mode
+
 
     if (!roomId) throw new HttpsError("invalid-argument", "roomId is required.");
     if (!Number.isFinite(league) || !Number.isFinite(season)) {
@@ -207,13 +248,14 @@ exports.seedPlayersFromCompetition = onCall(
       let page = 1;
       let totalPages = 1;
 
-      while (page <= totalPages && page <= maxPages) {
+      while (page <= totalPages && page <= maxPages && written < maxPlayers) {
         const res = await apiFootballGet("players", { league, season, page }, apiKey);
         totalPages = Number(res?.paging?.total ?? 1) || 1;
         pagesFetched += 1;
 
         const items = Array.isArray(res?.response) ? res.response : [];
         for (const it of items) {
+          if(written >= maxPlayers) break;
           await upsertPlayerFromApiItem(it, null);
         }
 
@@ -223,15 +265,17 @@ exports.seedPlayersFromCompetition = onCall(
       // --- Fixture-date mode: pull players only for the clubs playing that day ---
       for (const teamIdStr of teamMeta.keys()) {
         let page = 1;
+        if(written >= maxPlayers) break;
         let totalPages = 1;
 
-        while (page <= totalPages && page <= maxPagesPerTeam) {
+        while (page <= totalPages && page <= maxPagesPerTeam && written < maxPlayers) {
           const res = await apiFootballGet("players", { team: teamIdStr, season, page }, apiKey);
           totalPages = Number(res?.paging?.total ?? 1) || 1;
           pagesFetched += 1;
 
           const items = Array.isArray(res?.response) ? res.response : [];
           for (const it of items) {
+            if(written >= maxPlayers) break;
             await upsertPlayerFromApiItem(it, teamIdStr);
           }
 
@@ -265,11 +309,132 @@ exports.seedPlayersFromCompetition = onCall(
       timezone,
       pagesFetched,
       written,
+      maxPlayers,
+      hitCap: written >= maxPlayers,
       teamCount: fixtureDate ? teamMeta.size : null,
     };
   }
 );
 
+/*exports.setupCompetition = onCall(
+  { region: "us-west2", secrets: [APIFOOTBALL_KEY] },
+  async (request) => {
+    // 1. Auth Check
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
+
+    const { roomId, leagueId, season } = request.data;
+    if (!roomId || !leagueId || !season) {
+      throw new HttpsError("invalid-argument", "Missing roomId, leagueId, or season.");
+    }
+
+    // 2. Verify Host
+    const roomRef = db.doc(`rooms/${roomId}`);
+    const roomSnap = await roomRef.get();
+    if (!roomSnap.exists) throw new HttpsError("not-found", "Room not found.");
+    if (roomSnap.data().hostUid !== uid) throw new HttpsError("permission-denied", "Host only.");
+
+    const apiKey = APIFOOTBALL_KEY.value();
+    console.log(`SETTING UP ROOM ${roomId} for League ${leagueId} Season ${season}...`);
+
+    // 3. Save Competition Info to Room
+    await roomRef.set({
+      competition: {
+        provider: "api-football",
+        league: Number(leagueId),
+        season: Number(season),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      // Step #3: room-level competition lifecycle state
+      competitionState: {
+        currentWeekIndex: null,
+        currentLabel: null,
+        phaseLabel: null,
+        weekStatus: null,
+        isDone: false,
+        updatedAtMs: Date.now(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      status: "seeding_players" // UI can show a spinner based on this
+    }, { merge: true });
+
+    // 4. Fetch All Teams in this League
+    const teamsRes = await apiFootballGet("teams", { league: leagueId, season: season }, apiKey);
+    const teams = teamsRes.response || [];
+    console.log(`FOUND ${teams.length} TEAMS.`);
+
+    // 5. Fetch Players for Each Team (Batch Write)
+    // We limit to 3 pages per team to avoid timeouts (covers ~60 players per team)
+    const batch = db.batch();
+    let opCount = 0;
+    let playerCount = 0;
+
+    // Helper to commit batches
+    const commitBatch = async () => {
+      if (opCount > 0) {
+        await batch.commit();
+        opCount = 0;
+      }
+    };
+
+    for (const t of teams) {
+      const teamId = t.team.id;
+      const teamName = t.team.name;
+      const teamLogo = t.team.logo;
+
+      // Fetch players (Page 1 & 2 usually covers the main squad)
+      for (let page = 1; page <= 5; page++) {
+        const pRes = await apiFootballGet("players", { team: teamId, season: season, page }, apiKey);
+        const players = pRes.response || [];
+        if (players.length === 0) break;
+
+        for (const pData of players) {
+          const p = pData.player;
+          const stats = pData.statistics[0];
+          const pid = String(p.id);
+          
+          const ref = db.doc(`rooms/${roomId}/players/${pid}`);
+          batch.set(ref, {
+            id: pid,
+            name: p.name || "Unknown",
+            position: toPos(stats.games.position), // Your helper function
+            teamId: String(teamId),
+            teamName: teamName,
+            teamLogo: teamLogo,
+            photo: p.photo,
+            injured: p.injured,
+            league: String(leagueId),
+            season: String(season)
+          }, { merge: true });
+
+          playerCount++;
+          opCount++;
+          
+          if (opCount >= 400) { // Firestore limit is 500
+             // We create a new batch object after committing
+             await batch.commit(); 
+             opCount = 0;
+             // Note: In a loop like this, re-assigning 'batch' variable needs care.
+             // For simplicity in this example, we just await commit. 
+             // Ideally, you'd create a new batch instance here.
+          }
+        }
+        if (pRes.paging.current >= pRes.paging.total) break;
+      }
+    }
+
+    // Final Commit
+    if (opCount > 0) await batch.commit();
+
+    // 6. Mark as Ready
+    await roomRef.update({
+      status: "ready_to_draft",
+      playerCount: playerCount
+    });
+
+    return { success: true, teams: teams.length, players: playerCount };
+  }
+); */
 
 function extractStarters(lineupData) {
   if (!lineupData) return [];
@@ -327,8 +492,15 @@ function scorePlayer(stats, pos) {
     ownGoals: Number(stats?.ownGoals ?? 0),
   };
 
+  // --- CRITICAL FIX: If player has stats but 0 mins, give them 1 min ---
+  const hasActivity = s.goals > 0 || s.assists > 0 || s.passesCompleted > 0 || s.yellow > 0 || s.red > 0 || s.saves > 0;
+  if (s.minutes <= 0 && hasActivity) {
+      s.minutes = 1; 
+  }
   if (s.minutes <= 0) return { points: 0, breakdown: {} };
+  // -------------------------------------------------------------------
 
+  // Points Calculation
   let points = 0;
   const breakdown = {};
 
@@ -336,68 +508,88 @@ function scorePlayer(stats, pos) {
   if (s.minutes > 0) {
     points += SCORING.appearance.anyMinutes;
     breakdown.appearance = SCORING.appearance.anyMinutes;
-  }
-  if (s.minutes >= 60) {
-    points += SCORING.appearance.sixtyPlus;
-    breakdown.sixtyPlus = SCORING.appearance.sixtyPlus;
+    if (s.minutes >= 60) {
+      points += SCORING.appearance.sixtyPlus;
+      breakdown.sixtyPlus = SCORING.appearance.sixtyPlus;
+    }
   }
 
   // 2. Goals
-  if (s.goals) {
-    const v = s.goals * (SCORING.goals[pos] ?? 0);
-    points += v;
-    breakdown.goals = v;
+  if (s.goals > 0) {
+    const pts = (SCORING.goals[pos] || 4) * s.goals;
+    points += pts;
+    breakdown.goals = pts;
   }
 
   // 3. Assists
-  if (s.assists) {
-    const v = s.assists * SCORING.assists;
-    points += v;
-    breakdown.assists = v;
+  if (s.assists > 0) {
+    const pts = SCORING.assists * s.assists;
+    points += pts;
+    breakdown.assists = pts;
   }
 
-  // 4. Passes
-  const per = SCORING.passesCompleted.perByPos[pos] ?? 999999;
-  const chunks = Math.floor(s.passesCompleted / per);
-  if (chunks > 0) {
-    const v = chunks * SCORING.passesCompleted.pointsPerChunk;
-    points += v;
-    breakdown.passesCompleted = v;
+  // 4. Clean Sheet (GK/DEF/MID only)
+  if (s.cleanSheet) {
+    const rule = SCORING.cleanSheet[pos];
+    if (rule !== undefined && s.minutes >= (SCORING.cleanSheet.minMinutes || 60)) {
+      points += rule;
+      breakdown.cleanSheet = rule;
+    }
   }
 
-  // 5. Clean Sheet
-  if (s.cleanSheet && s.minutes >= SCORING.cleanSheet.minMinutes) {
-    const v = SCORING.cleanSheet[pos] ?? 0;
-    if (v !== 0) {
-      points += v;
-      breakdown.cleanSheet = v;
+  // 5. Saves (GK)
+  if (pos === "GK" && s.saves > 0) {
+    const chunk = SCORING.saves.per || 3;
+    const pts = Math.floor(s.saves / chunk) * (SCORING.saves[pos] || 1);
+    if (pts > 0) {
+      points += pts;
+      breakdown.saves = pts;
     }
   }
 
   // 6. Goals Conceded (GK/DEF)
-  const gcConfig = SCORING.goalsConceded;
   if ((pos === "GK" || pos === "DEF") && s.goalsConceded > 0) {
-    const drops = Math.floor(s.goalsConceded / gcConfig.per);
-    const v = drops * (gcConfig[pos] ?? -1);
-    if (v !== 0) {
-      points += v;
-      breakdown.goalsConceded = v;
+    const chunk = SCORING.goalsConceded.per || 2;
+    const pts = Math.floor(s.goalsConceded / chunk) * (SCORING.goalsConceded[pos] || -1);
+    if (pts !== 0) {
+      points += pts;
+      breakdown.goalsConceded = pts;
     }
   }
 
-  // 7. Saves (GK)
-  if (pos === "GK" && s.saves > 0) {
-    const chunks = Math.floor(s.saves / SCORING.saves.per);
-    const v = chunks * SCORING.saves.GK;
-    if (v !== 0) {
-      points += v;
-      breakdown.saves = v;
-    }
+  // 7. Penalties
+  if (s.pensSaved > 0) {
+    const pts = (SCORING.pens.saved || 5) * s.pensSaved;
+    points += pts;
+    breakdown.pensSaved = pts;
+  }
+  if (s.pensMissed > 0) {
+    const pts = (SCORING.pens.missed || -2) * s.pensMissed;
+    points += pts;
+    breakdown.pensMissed = pts;
   }
 
   // 8. Cards
-  if (s.yellow) { points += SCORING.cards.yellow; breakdown.yellow = SCORING.cards.yellow; }
-  if (s.red) { points += SCORING.cards.red; breakdown.red = SCORING.cards.red; }
+  if (s.yellow > 0) {
+    const pts = (SCORING.cards.yellow || -1) * s.yellow;
+    points += pts;
+    breakdown.yellow = pts;
+  }
+  if (s.red > 0) {
+    const pts = (SCORING.cards.red || -3) * s.red;
+    points += pts;
+    breakdown.red = pts;
+  }
+
+  // 9. Passes (Total)
+  if (SCORING.passesCompleted.enabled && s.passesCompleted > 0) {
+    const threshold = SCORING.passesCompleted.perByPos[pos] || 25; 
+    const pts = Math.floor(s.passesCompleted / threshold) * SCORING.passesCompleted.pointsPerChunk;
+    if (pts > 0) {
+        points += pts;
+        breakdown.passesCompleted = pts;
+    }
+  }
 
   return { points, breakdown };
 }
@@ -511,6 +703,52 @@ function buildLeaderboard(users, matchups, totalsByUid) {
   rows.sort((a, b) => (b.matchPoints - a.matchPoints) || (b.fantasyPoints - a.fantasyPoints));
   return rows;
 }
+
+exports.searchLeagues = onCall(
+  { region: "us-west2", secrets: [APIFOOTBALL_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
+
+    const q = String(request.data?.query || "").trim();
+    if (q.length < 2) return { results: [] };
+
+    const apiKey = APIFOOTBALL_KEY.value();
+    const res = await apiFootballGet("leagues", { search: q }, apiKey);
+
+    const items = Array.isArray(res?.response) ? res.response : [];
+
+    const results = items
+      .map((it) => {
+        const league = it?.league || {};
+        const country = it?.country || {};
+        const seasons = Array.isArray(it?.seasons) ? it.seasons : [];
+
+        const years = seasons
+          .map((s) => Number(s?.year))
+          .filter(Number.isFinite)
+          .sort((a, b) => b - a);
+
+        const currentSeason =
+          seasons.find((s) => s?.current)?.year ?? (years[0] ?? null);
+
+        return {
+          leagueId: String(league.id || ""),
+          name: league.name || "",
+          type: league.type || "",
+          logo: league.logo || "",
+          country: country.name || "",
+          seasons: years.slice(0, 8),
+          currentSeason: currentSeason ? Number(currentSeason) : null,
+        };
+      })
+      .filter((x) => x.leagueId && x.name)
+      .slice(0, 12);
+
+    return { results };
+  }
+);
+
 
 exports.computeRoundResults = onCall({ region: "us-west2" }, async (request) => {
   const uid = request.auth?.uid;
@@ -820,17 +1058,8 @@ exports.getUserLockStatus = onCall(
     }
 
 
-    if (myTeamIds.size === 0) {
-      return {
-        ok: true,
-        locked: false,
-        nowMs,
-        livePlayers: [],
-        checkedPlayers: myPlayers.length,
-        provider: "api-football",
-        note: "No teamIds found for this user yet.",
-      };
-    }
+    
+
 
     // 3) Cached live fixtures for competition
     async function getLiveFixturesCached() {
@@ -909,7 +1138,7 @@ exports.getUserLockStatus = onCall(
       nowMs,
       provider: "api-football",
       cached: liveFxRes.cached,
-      checkedPlayers: myPlayers.length,
+      checkedPlayers: (starters || []).length,
       livePlayers,          // for your UI “Subs locked: names…”
       matchedFixtures,      // useful for debugging
       competition: { league, season, timezone },
@@ -1076,6 +1305,15 @@ async function fetchNextRoundWindow({ league, season, timezone }, opts={}) {
   if (!list.length) return null;
 
   const roundLabel = list[0]?.league?.round || null;
+    if (roundLabel) {
+    const fxAll = await apiFootballGet(
+      "fixtures",
+      { league, season, round: roundLabel, timezone },
+      apiKey
+    );
+    const allList = Array.isArray(fxAll?.response) ? fxAll.response : [];
+    if (allList.length) list = allList;
+  }
   const sameRound = roundLabel ? list.filter((m) => m?.league?.round === roundLabel) : list;
 
   const fixtures = sameRound
@@ -1143,24 +1381,76 @@ exports.createNextWeek = onCall(
     // Round-robin matchups
     const pairs = roundRobinPairings(memberUids, weekIndex);
 
-    const weekDoc = {
-      index: weekIndex,
-      startAtMs: window.startAtMs,
-      endAtMs: window.endAtMs,
-      roundLabel: window.roundLabel || null,
+const weekDoc = {
 
-      // store fixtures so compute can seed stats per fixture
-      fixtures: window.fixtures,
-      fixtureIds: window.fixtures.map((f) => f.id),
 
-      competition,
-      matchups: pairs,
-      status: "scheduled",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+  index: weekIndex,
+
+
+  startAtMs: window.startAtMs,
+
+
+  endAtMs: window.endAtMs,
+
+
+  roundLabel: window.roundLabel || null,
+
+
+
+
+
+  // store fixtures so compute can seed stats per fixture
+
+
+  fixtures: window.fixtures,
+
+
+  fixtureIds: window.fixtures.map((f) => f.id),
+
+
+
+
+
+  // Step #2: lock fixture list at creation + hard end safety
+
+
+  fixtureIdsLocked: true,
+
+
+  fixtureIdsLockedAtMs: Date.now(),
+
+
+  hardEndAtMs: Number(window.endAtMs) + HARD_END_BUFFER_MS,
+
+
+
+
+
+  competition,
+
+
+  matchups: pairs,
+
+
+  status: "scheduled",
+
+
+  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+
+
+};
 
     await db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`).set(weekDoc, { merge: true });
-    await roomRef.set({ currentWeekIndex: weekIndex, competition }, { merge: true });
+    await roomRef.set({
+      currentWeekIndex: weekIndex,
+      competition,
+      ...buildCompetitionStateUpdate({
+        weekIndex,
+        label: weekDoc.roundLabel || null,
+        weekStatus: "scheduled",
+        isDone: false,
+      }),
+    }, { merge: true });
 
     return { ok: true, weekIndex, ...window };
   }
@@ -1186,6 +1476,10 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
   const week = weekSnap.data() || {};
   const startAtMs = Number(week.startAtMs);
   const endAtMs = Number(week.endAtMs);
+
+  const hardEndAtMs = Number.isFinite(Number(week.hardEndAtMs))
+    ? Number(week.hardEndAtMs)
+    : (Number.isFinite(endAtMs) ? (endAtMs + HARD_END_BUFFER_MS) : NaN);
 
   const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
   const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean).sort();
@@ -1381,10 +1675,17 @@ function buildPlayerStatsMapFromFixturePlayersResponse(responseArr) {
     const teamId = t.team?.id;
     const teamName = t.team?.name || "";
     
-    // FIND THE OPPONENT: The team that is NOT the current team
+    // Find Opponent
     const opponent = teams.find(x => x.team?.id !== teamId);
     const opponentName = opponent?.team?.name || "";
 
+    // --- NEW: CAPTURE MATCH STATUS ---
+    // The structure usually passed here needs to have access to the fixture data.
+    // NOTE: In the 'fixtures/players' endpoint, the status is not always deep inside.
+    // However, in your 'computeAndWriteLiveWeek' function, you have access to the 'fixture' object.
+    // We will pass the status IN via the loop in 'computeAndWriteLiveWeek' instead.
+    // See Step 2 below.
+    
     const players = Array.isArray(t?.players) ? t.players : [];
     
     for (const row of players) {
@@ -1394,10 +1695,12 @@ function buildPlayerStatsMapFromFixturePlayersResponse(responseArr) {
       const st = Array.isArray(row?.statistics) ? row.statistics[0] : null;
       if (!st) continue;
 
+      // ... (Keep your existing minutes/goals/passes logic here) ...
       const minutes = toNum(st?.games?.minutes);
       const goals = toNum(st?.goals?.total);
       const assists = toNum(st?.goals?.assists);
-      const passesCompleted = toNum(st?.passes?.total);
+      const passesCompleted = toNum(st?.passes?.total); // Using Total Passes as discussed
+      
       const saves = toNum(st?.goals?.saves);
       const goalsConceded = toNum(st?.goals?.conceded);
       const yellow = toNum(st?.cards?.yellow);
@@ -1406,13 +1709,13 @@ function buildPlayerStatsMapFromFixturePlayersResponse(responseArr) {
       const pensMissed = toNum(st?.penalty?.missed);
 
       let cleanSheet = false;
-      if (minutes > 0 && goalsConceded === 0) {
-        cleanSheet = true;
-      }
+      if (minutes > 0 && goalsConceded === 0) cleanSheet = true;
+
+      const ownGoals = 0; 
 
       out[String(pid)] = { 
-        teamName,      // <--- We save the Player's Team
-        opponentName,  // <--- We save the Opponent
+        teamName,
+        opponentName,
         minutes, 
         goals, 
         assists, 
@@ -1424,6 +1727,8 @@ function buildPlayerStatsMapFromFixturePlayersResponse(responseArr) {
         pensSaved,
         pensMissed,
         cleanSheet,
+        ownGoals,
+        // We will merge the status in the main loop
       };
     }
   }
@@ -1446,17 +1751,33 @@ async function getFixturePlayersStatsMapCached({ fixtureId, apiKey, ttlMs }) {
 
   // If fixture hasn't started yet, this can return 204 No Content (handled in apiFootballGet)
   const json = await apiFootballGet("fixtures/players", { fixture: String(fixtureId) }, apiKey);
-  const playerStats = buildPlayerStatsMapFromFixturePlayersResponse(json?.response || []);
+  const fresh = buildPlayerStatsMapFromFixturePlayersResponse(json?.response || []);
+
+  // Sometimes the API returns 204/empty even when a fixture should have stats.
+  // Do NOT overwrite a previously cached non-empty map with an empty one.
+  if (!fresh || Object.keys(fresh).length === 0) {
+    try {
+      const snap2 = await ref.get();
+      if (snap2.exists) {
+        const d2 = snap2.data() || {};
+        const prev = d2.playerStats;
+        if (prev && Object.keys(prev).length > 0) {
+          await ref.set({ updatedAtMs: now }, { merge: true });
+          return prev;
+        }
+      }
+    } catch (_) {}
+  }
 
   await ref.set(
     {
       updatedAtMs: now,
-      playerStats,
+      playerStats: fresh,
     },
     { merge: true }
   );
 
-  return playerStats;
+  return fresh;
 }
 
 async function getFixtureStatusMap({ fixtureIds, timezone, apiKey }) {
@@ -1504,6 +1825,472 @@ function isFinished(short) {
   return ["FT", "AET", "PEN"].includes(short);
 }
 
+// ---------------- Live Week Compute (API stats) ----------------
+
+// Step #4: Auto-advance (server-side) — when a week becomes final, create the next week automatically
+// for non-World Cup modes. This keeps Bundesliga/UCL moving without a manual "Create Next Week" button.
+async function autoAdvanceNextWeekIfNeeded({ roomId, apiKey, fromWeekIndex }) {
+  const roomRef = db.doc(`rooms/${roomId}`);
+  const roomSnap = await roomRef.get();
+  if (!roomSnap.exists) return;
+
+  const room = roomSnap.data() || {};
+  const mode = String(room?.competitionMode || "LEAGUE_SEASON").toUpperCase();
+  if (mode === "WORLD_CUP_GROUPS") return; // Step #5 will handle World Cup window weeks separately
+
+  // require even managers
+  const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
+  const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean);
+  if (memberUids.length < 2 || memberUids.length % 2 !== 0) return;
+
+  const nextWeekIndex = Number(fromWeekIndex) + 1;
+  if (!Number.isFinite(nextWeekIndex) || nextWeekIndex < 1) return;
+
+  const nextWeekRef = db.doc(`rooms/${roomId}/weeks/${String(nextWeekIndex)}`);
+  const nextWeekSnap = await nextWeekRef.get();
+
+  // If already created, ensure room points to it and return
+  if (nextWeekSnap.exists) {
+    const next = nextWeekSnap.data() || {};
+    await roomRef.set(
+      {
+        currentWeekIndex: nextWeekIndex,
+        competition: room.competition || next.competition || null,
+        ...buildCompetitionStateUpdate({
+          weekIndex: nextWeekIndex,
+          label: next.roundLabel || null,
+          weekStatus: next.status || "scheduled",
+          isDone: false,
+        }),
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+  // Competition config (room must already have one chosen)
+  const competition = room.competition;
+  if (!competition?.league || !competition?.season) return;
+
+  const fallbackDate = room?.seedFilter?.fixtureDate || null;
+  const window = await fetchNextRoundWindow(competition, { fallbackDate });
+  if (!window) return; // no upcoming fixtures
+
+  const pairs = roundRobinPairings(memberUids, nextWeekIndex);
+
+  const weekDoc = {
+    index: nextWeekIndex,
+    startAtMs: window.startAtMs,
+    endAtMs: window.endAtMs,
+    roundLabel: window.roundLabel || null,
+
+    fixtures: window.fixtures,
+    fixtureIds: window.fixtures.map((f) => f.id),
+
+    fixtureIdsLocked: true,
+    fixtureIdsLockedAtMs: Date.now(),
+    hardEndAtMs: Number(window.endAtMs) + HARD_END_BUFFER_MS,
+
+    competition,
+    matchups: pairs,
+    status: "scheduled",
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    autoAdvancedFromWeekIndex: Number(fromWeekIndex),
+  };
+
+  // Use create() for idempotency (won't overwrite if it somehow exists)
+  try {
+    await nextWeekRef.create(weekDoc);
+  } catch (e) {
+    // If another invocation created it first, that's fine.
+    const msg = String(e?.message || "");
+    if (!msg.includes("ALREADY_EXISTS") && !msg.includes("already exists") && e?.code !== 6) {
+      console.warn("autoAdvanceNextWeekIfNeeded create failed:", e);
+      return;
+    }
+  }
+
+  await roomRef.set(
+    {
+      currentWeekIndex: nextWeekIndex,
+      competition,
+      ...buildCompetitionStateUpdate({
+        weekIndex: nextWeekIndex,
+        label: weekDoc.roundLabel || null,
+        weekStatus: "scheduled",
+        isDone: false,
+      }),
+    },
+    { merge: true }
+  );
+}
+
+async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
+  if (!roomId || !Number.isFinite(Number(weekIndex))) return;
+
+  const now = Date.now();
+  const idx = String(weekIndex);
+
+  const weekRef = db.doc(`rooms/${roomId}/weeks/${idx}`);
+  const weekSnap = await weekRef.get();
+  if (!weekSnap.exists) return;
+
+  const week = weekSnap.data() || {};
+  const startAtMs = Number(week.startAtMs || 0);
+  const endAtMs = Number(week.endAtMs || 0);
+  const timezone = week?.competition?.timezone || "America/Los_Angeles";
+
+  const fixturesArr = Array.isArray(week.fixtures) ? week.fixtures : [];
+  const fixtureIds = (Array.isArray(week.fixtureIds) && week.fixtureIds.length)
+    ? week.fixtureIds.map((x) => String(x)).filter(Boolean)
+    : fixturesArr.map((f) => String(f?.id ?? f?.fixtureId ?? f?.fixture?.id ?? "")).filter(Boolean);
+
+  const kickoffMsByFixtureId = {};
+  for (const f of fixturesArr) {
+    const id = String(f?.id ?? f?.fixtureId ?? f?.fixture?.id ?? "");
+    const ko = Number(f?.kickoffMs ?? (f?.fixture?.timestamp ? f.fixture.timestamp * 1000 : NaN));
+    if (id && Number.isFinite(ko)) kickoffMsByFixtureId[id] = ko;
+  }
+
+  const weekResultsRef = db.doc(`rooms/${roomId}/weekResults/${idx}`);
+  const prevSnap = await weekResultsRef.get();
+  const prevResults = prevSnap.exists ? (prevSnap.data() || {}) : {};
+  const prevTotals = prevResults.teamScoresByUserId || {};
+  const prevHadPoints = Object.values(prevTotals).some((v) => Number(v) > 0);
+  const prevFixtureStatusById = prevResults.fixtureStatusById || {};
+
+  const forceRecompute = Boolean(prevResults.forceRecompute || week.forceRecompute);
+
+  // If already final and long past the end window, skip unless forced
+  const POST_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
+  if (!forceRecompute && week.status === "final" && Number.isFinite(endAtMs) && now > endAtMs + POST_WINDOW_MS) {
+    return;
+  }
+
+  // 1) Fetch live statuses (single API hit usually)
+  const statusByFixtureId = await getFixtureStatusMap({ fixtureIds, timezone, apiKey });
+
+  // Fill missing statuses from previous write (prevents flapping on sparse API returns)
+  // IMPORTANT: only carry forward stable statuses (NS / finished). Don't keep an old "in-play" status forever.
+  for (const fId of fixtureIds) {
+    const k = String(fId);
+    const prevShort = prevFixtureStatusById[k] || null;
+    if (!statusByFixtureId[k] && prevShort && (prevShort === "NS" || isFinished(prevShort))) {
+      statusByFixtureId[k] = prevShort;
+    }
+  }
+
+  const anyInPlay = fixtureIds.some((id) => isInPlay(statusByFixtureId[String(id)] || null));
+  const allFinished = fixtureIds.length
+    ? fixtureIds.every((id) => isFinished(statusByFixtureId[String(id)] || "") || statusByFixtureId[String(id)] === "NS")
+    : false;
+
+  const pastHardEnd = Number.isFinite(hardEndAtMs) && now > hardEndAtMs;
+  const shouldFinalize = (!anyInPlay) && (
+    (Number.isFinite(endAtMs) && now > endAtMs + POST_WINDOW_MS && allFinished) ||
+    pastHardEnd
+  );
+  const statusValue = shouldFinalize ? "final" : (anyInPlay ? "live" : "idle");
+
+  // Next kickoff (for UI + scheduling hints)
+  let nextKickoffMs = null;
+  for (const fId of fixtureIds) {
+    const ko = kickoffMsByFixtureId[String(fId)];
+    if (!Number.isFinite(ko)) continue;
+    if (ko > now && (nextKickoffMs == null || ko < nextKickoffMs)) nextKickoffMs = ko;
+  }
+
+  // 2) Load members + lineups (starters only score)
+  const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
+  const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean).sort();
+
+  const users = [];
+  for (const mUid of memberUids) {
+    const userSnap = await db.doc(`users/${mUid}`).get();
+    const profile = userSnap.exists ? userSnap.data() : {};
+    const display = (profile.displayName || profile.name || mUid).trim();
+
+    const tnSnap = await db.doc(`rooms/${roomId}/teamNames/${mUid}`).get();
+    const tn = tnSnap.exists ? (tnSnap.data().teamName || "") : "";
+    const name = tn ? `${display} — ${tn}` : display;
+
+    const lineupSnap = await db.doc(`rooms/${roomId}/lineups/${mUid}`).get();
+    const lineup = lineupSnap.exists ? lineupSnap.data() : null;
+
+    const starters = extractStarters(lineup);
+    users.push({ userId: mUid, name, starters });
+  }
+
+  const starterIds = new Set();
+  for (const u of users) {
+    for (const p of (u.starters || [])) starterIds.add(String(p.id));
+  }
+
+  // If no starters yet, still write status so UI updates, but don't write totals
+  if (starterIds.size === 0) {
+    await weekResultsRef.set(
+      {
+        roomId,
+        weekIndex: Number(weekIndex),
+        startAtMs: startAtMs || null,
+        endAtMs: endAtMs || null,
+        roundLabel: week.roundLabel || null,
+        status: statusValue,
+        nextKickoffMs: nextKickoffMs ?? null,
+        fixtureStatusById: statusByFixtureId,
+        updatedAtMs: Date.now(),
+        computedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+  // 3) Aggregate stats across fixtures for starters
+  const aggStatsByPlayerId = {};
+  const LIVE_TTL_MS = 60 * 1000;
+  const FINISHED_TTL_MS = 10 * 60 * 1000;
+
+  for (const fId of fixtureIds) {
+    const fid = String(fId);
+    const short = statusByFixtureId[fid] || null;
+
+    // Save API calls: skip not started
+    if (!short || short === "NS") continue;
+
+    const inPlay = isInPlay(short);
+    const ko = kickoffMsByFixtureId[fid] ?? null;
+
+    const ttlMs = inPlay ? LIVE_TTL_MS : (isFinished(short) ? FINISHED_TTL_MS : LIVE_TTL_MS);
+    const map = await getFixturePlayersStatsMapCached({ fixtureId: fid, apiKey, ttlMs });
+
+    for (const [pidRaw, st] of Object.entries(map || {})) {
+      const pid = String(pidRaw);
+      if (!starterIds.has(pid)) continue;
+
+      const prev = aggStatsByPlayerId[pid] || {
+        minutes: 0, passesCompleted: 0, goals: 0, assists: 0,
+        saves: 0, goalsConceded: 0, yellow: 0, red: 0,
+        pensSaved: 0, pensMissed: 0, cleanSheet: false,
+        ownGoals: 0,
+        teamName: "",
+        opponentName: "",
+        isLive: false,
+        fixtureStatus: null,
+        fixtureId: null,
+        kickoffMs: null,
+      };
+
+      aggStatsByPlayerId[pid] = {
+        minutes: prev.minutes + (st.minutes || 0),
+        goals: prev.goals + (st.goals || 0),
+        assists: prev.assists + (st.assists || 0),
+        passesCompleted: prev.passesCompleted + (st.passesCompleted || 0),
+        saves: prev.saves + (st.saves || 0),
+        goalsConceded: prev.goalsConceded + (st.goalsConceded || 0),
+        yellow: prev.yellow + (st.yellow || 0),
+        red: prev.red + (st.red || 0),
+        pensSaved: prev.pensSaved + (st.pensSaved || 0),
+        pensMissed: prev.pensMissed + (st.pensMissed || 0),
+        cleanSheet: prev.cleanSheet || st.cleanSheet || false,
+        ownGoals: (prev.ownGoals || 0) + (st.ownGoals || 0),
+
+        teamName: st.teamName || prev.teamName || "",
+        opponentName: st.opponentName || prev.opponentName || "",
+
+        isLive: Boolean(prev.isLive) || inPlay,
+        fixtureStatus: prev.fixtureStatus || short || null,
+        fixtureId: prev.fixtureId || fid,
+        kickoffMs: prev.kickoffMs || ko || null,
+      };
+    }
+  }
+
+  const haveAnyStats = Object.keys(aggStatsByPlayerId).length > 0;
+  if (!forceRecompute && !haveAnyStats && prevHadPoints && !anyInPlay) {
+    // Keep previous points; only update status/timing
+    await weekResultsRef.set(
+      {
+        status: statusValue,
+        nextKickoffMs: nextKickoffMs ?? null,
+        fixtureStatusById: statusByFixtureId,
+        updatedAtMs: Date.now(),
+        computedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+  // 4) Score users
+  const totalsByUid = {};
+  const breakdownByUserId = {};
+  for (const u of users) {
+    const statsByPlayerId = {};
+    for (const p of (u.starters || [])) {
+      statsByPlayerId[String(p.id)] = aggStatsByPlayerId[String(p.id)] || {};
+    }
+    const scored = scoreTeam(u.starters || [], statsByPlayerId);
+    totalsByUid[u.userId] = scored.total;
+    breakdownByUserId[u.userId] = scored;
+  }
+
+  // Guard: never overwrite previously non-zero totals with all-zeros due to an API hiccup/empty stats payload.
+  // Fantasy points can fluctuate up/down slightly (cards, etc.), but a full drop to 0 after having points is almost always wrong.
+  const computedHadPoints = Object.values(totalsByUid).some((v) => Number(v) > 0);
+  if (!forceRecompute && prevHadPoints && !computedHadPoints && !shouldFinalize) {
+    await weekResultsRef.set(
+      {
+        status: statusValue,
+        nextKickoffMs: nextKickoffMs ?? null,
+        fixtureStatusById: statusByFixtureId,
+        updatedAtMs: Date.now(),
+        computedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+
+
+  // 5) Matchups + leaderboard
+  const matchupPairs = Array.isArray(week.matchups) && week.matchups.length
+    ? week.matchups
+    : roundRobinPairings(memberUids, Number(weekIndex));
+
+  const matchups = matchupPairs.map((pair) => {
+    const homeTotal = totalsByUid[pair.homeUserId] ?? 0;
+    const awayTotal = totalsByUid[pair.awayUserId] ?? 0;
+
+    let homeResult = "L", awayResult = "W", winnerUserId = pair.awayUserId;
+    if (homeTotal > awayTotal) { homeResult = "W"; awayResult = "L"; winnerUserId = pair.homeUserId; }
+    else if (homeTotal === awayTotal) { homeResult = "D"; awayResult = "D"; winnerUserId = null; }
+
+    return {
+      weekIndex: Number(weekIndex),
+      homeUserId: pair.homeUserId,
+      awayUserId: pair.awayUserId,
+      homeTotal,
+      awayTotal,
+      homeResult,
+      awayResult,
+      winnerUserId,
+      status: statusValue === "final" ? "FINAL" : (anyInPlay ? "LIVE" : "IDLE"),
+    };
+  });
+
+  const weekLeaderboard = buildLeaderboard(users, matchups, totalsByUid);
+
+  // 6) Recompute cumulative standings from all weekResults (idempotent)
+  const resultsSnap = await db.collection(`rooms/${roomId}/weekResults`).get();
+  const agg = {}; // uid -> row
+  function ensure(uid, name) {
+    if (!agg[uid]) agg[uid] = { userId: uid, name: name || uid, played: 0, wins: 0, draws: 0, losses: 0, tablePoints: 0, totalFantasyPoints: 0 };
+    if (name) agg[uid].name = name;
+    return agg[uid];
+  }
+
+  const allWeeks = resultsSnap.docs
+    .map((d) => d.data())
+    .filter(Boolean)
+    .filter((d) => Number(d.weekIndex) !== Number(weekIndex));
+
+  allWeeks.push({ weekIndex: Number(weekIndex), matchups, teamScoresByUserId: totalsByUid });
+
+  for (const w of allWeeks) {
+    const ms = Array.isArray(w.matchups) ? w.matchups : [];
+    for (const m of ms) {
+      const home = ensure(m.homeUserId);
+      const away = ensure(m.awayUserId);
+
+      home.played += 1;
+      away.played += 1;
+
+      const homePts = m.homeResult === "W" ? 3 : m.homeResult === "D" ? 1 : 0;
+      const awayPts = m.awayResult === "W" ? 3 : m.awayResult === "D" ? 1 : 0;
+
+      home.tablePoints += homePts;
+      away.tablePoints += awayPts;
+
+      if (m.homeResult === "W") home.wins += 1;
+      else if (m.homeResult === "D") home.draws += 1;
+      else home.losses += 1;
+
+      if (m.awayResult === "W") away.wins += 1;
+      else if (m.awayResult === "D") away.draws += 1;
+      else away.losses += 1;
+    }
+
+    const scores = w.teamScoresByUserId || {};
+    for (const uid2 of Object.keys(scores)) {
+      const row = ensure(uid2);
+      row.totalFantasyPoints += Number(scores[uid2] || 0);
+    }
+  }
+
+  for (const u of users) ensure(u.userId, u.name);
+
+  const standings = Object.values(agg).sort(
+    (a, b) => (b.tablePoints - a.tablePoints) || (b.totalFantasyPoints - a.totalFantasyPoints)
+  );
+
+  // 7) Write weekResults (+ keep points stable)
+  await weekResultsRef.set(
+    {
+      roomId,
+      weekIndex: Number(weekIndex),
+      startAtMs: startAtMs || null,
+      endAtMs: endAtMs || null,
+      roundLabel: week.roundLabel || null,
+      status: statusValue,
+      nextKickoffMs: nextKickoffMs ?? null,
+      fixtureStatusById: statusByFixtureId,
+      teamScoresByUserId: totalsByUid,
+      breakdownByUserId,
+      matchups,
+      weekLeaderboard,
+      updatedAtMs: Date.now(),
+      computedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  await db.doc(`rooms/${roomId}/standings/current`).set(
+    {
+      roomId,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      standings,
+    },
+    { merge: true }
+  );
+  if (shouldFinalize && week.status !== "final") {
+    await weekRef.set(
+      { status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+
+    // Step #3: mark room competitionState as finalized for this week (single write on transition)
+    const roomRef = db.doc(`rooms/${roomId}`);
+    await roomRef.set(
+      buildCompetitionStateUpdate({
+        weekIndex,
+        label: week.roundLabel || null,
+        weekStatus: "final",
+        isDone: false,
+      }),
+      { merge: true }
+    );
+
+    // Step #4: auto-create next week (Bundesliga/UCL) once this week finalizes
+    await autoAdvanceNextWeekIfNeeded({ roomId, apiKey, fromWeekIndex: Number(weekIndex) });
+  }
+  // Clear force flag if it was set
+  if (prevResults.forceRecompute) {
+    await weekResultsRef.set({ forceRecompute: admin.firestore.FieldValue.delete() }, { merge: true });
+  }
+}
+
 async function ensureCurrentWeekIfMissing({ roomId, room, apiKey }) {
   const currentIdx = Number(room?.currentWeekIndex);
   if (Number.isFinite(currentIdx) && currentIdx > 0) return currentIdx;
@@ -1549,7 +2336,11 @@ async function ensureCurrentWeekIfMissing({ roomId, room, apiKey }) {
   };
 
   await db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`).set(weekDoc, { merge: true });
-  await db.doc(`rooms/${roomId}`).set({ currentWeekIndex: weekIndex, competition }, { merge: true });
+  await db.doc(`rooms/${roomId}`).set({
+    currentWeekIndex: weekIndex,
+    competition,
+    ...buildCompetitionStateUpdate({ weekIndex, label: weekDoc.roundLabel || null, weekStatus: "scheduled", isDone: false }),
+  }, { merge: true });
 
   // Create an empty weekResults doc so the UI has something immediately.
   await db.doc(`rooms/${roomId}/weekResults/${String(weekIndex)}`).set(
@@ -1579,265 +2370,236 @@ async function ensureCurrentWeekIfMissing({ roomId, room, apiKey }) {
   return weekIndex;
 }
 
-async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
-  const roomRef = db.doc(`rooms/${roomId}`);
-  const roomSnap = await roomRef.get();
-  if (!roomSnap.exists) return;
-  const room = roomSnap.data() || {};
-
-  const weekRef = db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`);
-  const weekSnap = await weekRef.get();
-  if (!weekSnap.exists) return;
-  const week = weekSnap.data() || {};
-
-  const competition = week.competition || room.competition || {
-    provider: "api-football",
-    league: 2,
-    season: 2025,
-    timezone: "America/Los_Angeles",
-  };
-
-  const startAtMs = Number(week.startAtMs);
-  const endAtMs = Number(week.endAtMs);
-  const now = Date.now();
-
-  const PRE_WINDOW_MS = 60 * 60 * 1000;      
-  const POST_WINDOW_MS = 3 * 60 * 60 * 1000; 
-
-  if (Number.isFinite(startAtMs) && now < startAtMs - PRE_WINDOW_MS) return;
-
-  // BYPASS: Comment this out if you need to force-update an old week
-  if (Number.isFinite(endAtMs) && now > endAtMs + POST_WINDOW_MS && week.status === "final") {
-    return; 
-  }
-
-  const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
-  const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean).sort();
-  if (memberUids.length < 2 || memberUids.length % 2 !== 0) return;
-
-  // --- FIX START: Fetch Real Player Positions from DB ---
-  // This prevents Forwards from being scored as Midfielders (5pts vs 4pts)
-  const allPlayersSnap = await db.collection(`rooms/${roomId}/players`).get();
-  const positionMap = {}; // "playerID" -> "FWD"
-  allPlayersSnap.forEach(doc => {
-      const d = doc.data();
-      if (d.id && d.position) positionMap[String(d.id)] = d.position;
-  });
-  // --- FIX END ---
-
-  const users = [];
-  for (const mUid of memberUids) {
-    const userSnap = await db.doc(`users/${mUid}`).get();
-    const profile = userSnap.exists ? userSnap.data() : {};
-    const display = (profile.displayName || profile.name || mUid).trim();
-
-    const tnSnap = await db.doc(`rooms/${roomId}/teamNames/${mUid}`).get();
-    const tn = tnSnap.exists ? (tnSnap.data().teamName || "") : "";
-    const name = tn ? `${display} — ${tn}` : display;
-
-    const lineupSnap = await db.doc(`rooms/${roomId}/lineups/${mUid}`).get();
-    const lineup = lineupSnap.exists ? lineupSnap.data() : null;
-
-    const starters = extractStarters(lineup);
-
-    // Apply Real Positions
-    starters.forEach(p => {
-        if (positionMap[String(p.id)]) {
-            p.position = positionMap[String(p.id)];
-        }
-    });
-
-    users.push({ userId: mUid, name, starters });
-  }
-
-  const matchupPairs = Array.isArray(week.matchups) && week.matchups.length
-    ? week.matchups
-    : roundRobinPairings(memberUids, weekIndex);
-
-  const starterIds = new Set();
-  for (const u of users) for (const p of (u.starters || [])) starterIds.add(String(p.id));
-
-    // --- Fixture IDs (support both shapes) ---
-  let fixtureIds = [];
-
-  if (Array.isArray(week.fixtureIds) && week.fixtureIds.length) {
-    fixtureIds = week.fixtureIds.map((x) => String(x)).filter(Boolean);
-  } else {
-    const weekFixtures = Array.isArray(week.fixtures) ? week.fixtures : [];
-    fixtureIds = weekFixtures
-      .map((f) => f?.id ?? f?.fixture?.id ?? null)
-      .filter(Boolean)
-      .map((id) => String(id));
-  }
-
-
-  const statusByFixtureId = await getFixtureStatusMap({
-    fixtureIds,
-    timezone: competition.timezone || "America/Los_Angeles",
-    apiKey,
-  });
-
+async function fetchAggregatedStats(fixtureIds, apiKey) {
   const aggStatsByPlayerId = {};
-  const LIVE_TTL_MS = 60 * 1000;
-  const FINISHED_TTL_MS = 10 * 60 * 1000;
-  //const FINISHED_TTL_MS = 1;
+  const fixtureStatusById = {};
+  let nextKickoffMs = null;
+  let anyInPlay = false;
+
+  // 1. GET HIGH-LEVEL FIXTURE DATA (For Status & Time)
+  // (Assumes you have a getLiveFixturesMap function, or you can implement a simple fetch here)
+  // For simplicity, we will assume we fetch stats fixture-by-fixture below, 
+  // but in a production app, fetching the schedule list first is better.
 
   for (const fId of fixtureIds) {
-    const short = statusByFixtureId[String(fId)] || null;
+    // A. DETERMINE STATUS & TTL
+    // We assume getFixturePlayersStatsMapCached returns the "fixture" object inside its response
+    // or we infer it. To be safe, we use a default TTL.
     
-    // comment this out for production to save API calls
-    if (!short || short === "NS") continue;
+    // FETCH STATS (API CALL)
+    // We set a default TTL of 60s. The cache function handles the logic.
+    const map = await getFixturePlayersStatsMapCached({ 
+        fixtureId: fId, 
+        apiKey, 
+        ttlMs: 60 * 1000 
+    });
 
-    const ttlMs = isInPlay(short) ? LIVE_TTL_MS : (isFinished(short) ? FINISHED_TTL_MS : LIVE_TTL_MS);
-    const map = await getFixturePlayersStatsMapCached({ fixtureId: fId, apiKey, ttlMs });
+    // We need the fixture status. Since your cache function returns a map of players, 
+    // we might lose the top-level fixture data. 
+    // TRICK: We will try to pull status from the first player in the map if available,
+    // OR we relies on a separate call. 
+    // BETTER WAY: Let's assume we call getFixtureStatusMap separately or previously.
+    // For now, let's infer status from the map data if we saved it there.
+    
+    // If map is empty, we can't do much about status unless we fetched it separately.
+    // Let's assume the loop logic from previous turns:
+    
+    if (!map) continue;
 
-    for (const [pid, st] of Object.entries(map || {})) {
-      if (!starterIds.has(String(pid))) continue;
-      
-      // Merge stats (in case a player played 2 games in one week)
-      const prev = aggStatsByPlayerId[String(pid)] || { 
-        minutes: 0, passesCompleted: 0, goals: 0, assists: 0,
-        saves: 0, goalsConceded: 0, yellow: 0, red: 0, pensSaved: 0, pensMissed: 0, cleanSheet: false 
-      };
+    // B. MERGE STATS
+    for (const [pid, st] of Object.entries(map)) {
+        // Save Status for UI (One time grab)
+        if (!fixtureStatusById[fId] && st.matchStatus) {
+            fixtureStatusById[fId] = st.matchStatus;
+            if (st.isLive) anyInPlay = true;
+        }
 
-      // Simple sum for numbers, OR for booleans
-      aggStatsByPlayerId[String(pid)] = {
-        minutes: prev.minutes + (st.minutes || 0),
-        goals: prev.goals + (st.goals || 0),
-        assists: prev.assists + (st.assists || 0),
-        passesCompleted: prev.passesCompleted + (st.passesCompleted || 0),
-        saves: prev.saves + (st.saves || 0),
-        goalsConceded: prev.goalsConceded + (st.goalsConceded || 0),
-        yellow: prev.yellow + (st.yellow || 0),
-        red: prev.red + (st.red || 0),
-        pensSaved: prev.pensSaved + (st.pensSaved || 0),
-        pensMissed: prev.pensMissed + (st.pensMissed || 0),
-        cleanSheet: prev.cleanSheet || st.cleanSheet || false, // true if true in any game
-        ownGoals: prev.ownGoals + (st.ownGoals || 0),
-        teamName: st.teamName || prev.teamName || "Unknown Team",
-        opponentName: st.opponentName || prev.opponentName || "Unknown Opponent",
-      };
+        if (!aggStatsByPlayerId[pid]) {
+            aggStatsByPlayerId[pid] = {
+                minutes: 0, goals: 0, assists: 0, passesCompleted: 0,
+                saves: 0, goalsConceded: 0, yellow: 0, red: 0,
+                pensSaved: 0, pensMissed: 0, cleanSheet: false, ownGoals: 0,
+                teamName: "", opponentName: "",
+                matchStatus: "NS", isLive: false
+            };
+        }
+
+        const prev = aggStatsByPlayerId[pid];
+
+        // --- GHOST PLAYER FIX ---
+        const hasActivity = (st.goals > 0 || st.assists > 0 || st.passesCompleted > 0 || st.yellow > 0);
+        let safeMinutes = st.minutes || 0;
+        if (safeMinutes === 0 && hasActivity) safeMinutes = 1;
+
+        aggStatsByPlayerId[pid] = {
+            minutes: prev.minutes + safeMinutes,
+            goals: prev.goals + (st.goals || 0),
+            assists: prev.assists + (st.assists || 0),
+            passesCompleted: prev.passesCompleted + (st.passesCompleted || 0),
+            saves: prev.saves + (st.saves || 0),
+            goalsConceded: prev.goalsConceded + (st.goalsConceded || 0),
+            yellow: prev.yellow + (st.yellow || 0),
+            red: prev.red + (st.red || 0),
+            pensSaved: prev.pensSaved + (st.pensSaved || 0),
+            pensMissed: prev.pensMissed + (st.pensMissed || 0),
+            cleanSheet: prev.cleanSheet || st.cleanSheet || false,
+            ownGoals: (prev.ownGoals || 0) + (st.ownGoals || 0),
+            
+            // Text & Status
+            teamName: st.teamName || prev.teamName,
+            opponentName: st.opponentName || prev.opponentName,
+            matchStatus: st.matchStatus || prev.matchStatus,
+            isLive: st.isLive || prev.isLive
+        };
     }
   }
-
-  // Score Teams
-  const totalsByUid = {};
-  const breakdownByUserId = {};
-
-  for (const u of users) {
-    const statsByPlayerId = {};
-    for (const p of u.starters) {
-      statsByPlayerId[p.id] = aggStatsByPlayerId[p.id] || { minutes: 0 };
-    }
-    const scored = scoreTeam(u.starters, statsByPlayerId);
-    totalsByUid[u.userId] = scored.total;
-    breakdownByUserId[u.userId] = scored;
-  }
-
-  // Determine Results
-  const allFinished = fixtureIds.length
-    ? fixtureIds.every((id) => isFinished(statusByFixtureId[String(id)]))
-    : false;
-
-  const shouldFinalize =
-    week.status === "final"
-      ? true
-      : (Number.isFinite(endAtMs) ? now > endAtMs + POST_WINDOW_MS : false) && allFinished;
-
-  const matchups = matchupPairs.map((pair) => {
-    const homeTotal = totalsByUid[pair.homeUserId] ?? 0;
-    const awayTotal = totalsByUid[pair.awayUserId] ?? 0;
-
-    let homeResult = "L", awayResult = "W", winnerUserId = pair.awayUserId;
-    if (homeTotal > awayTotal) { homeResult = "W"; awayResult = "L"; winnerUserId = pair.homeUserId; }
-    else if (homeTotal === awayTotal) { homeResult = "D"; awayResult = "D"; winnerUserId = null; }
-
-    return { ...pair, homeTotal, awayTotal, homeResult, awayResult, winnerUserId };
-  });
-
-  // Week Leaderboard
-  const nameById = Object.fromEntries(users.map((u) => [u.userId, u.name]));
-  const weekLeaderboard = users.map((u) => {
-    const myMatch = matchups.find((m) => m.homeUserId === u.userId || m.awayUserId === u.userId);
-    const isHome = myMatch?.homeUserId === u.userId;
-    const res = myMatch ? (isHome ? myMatch.homeResult : myMatch.awayResult) : "D";
-
-    const matchPoints = !shouldFinalize ? 0 : (res === "W" ? 3 : res === "D" ? 1 : 0);
-
-    return {
-      userId: u.userId,
-      name: nameById[u.userId] || u.userId,
-      result: res,
-      matchPoints,
-      fantasyPoints: totalsByUid[u.userId] ?? 0,
-    };
-  }).sort((a, b) => (b.matchPoints - a.matchPoints) || (b.fantasyPoints - a.fantasyPoints));
-
-  // Write Result
-  await db.doc(`rooms/${roomId}/weekResults/${String(weekIndex)}`).set(
-    {
-      roomId,
-      weekIndex,
-      startAtMs: startAtMs || null,
-      endAtMs: endAtMs || null,
-      roundLabel: week.roundLabel || null,
-      status: shouldFinalize ? "final" : "live",
-      fixtureStatusById: statusByFixtureId,
-      teamScoresByUserId: totalsByUid,
-      breakdownByUserId,
-      matchups,
-      weekLeaderboard,
-      updatedAtMs: Date.now(),
-      computedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
-
-  if (shouldFinalize && week.status !== "final") {
-    await weekRef.set(
-      { status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    );
-  }
-
-  // Update Standings (Same as before)
-  const allWeeksSnap = await db.collection(`rooms/${roomId}/weekResults`).get();
-  const allWeekResults = allWeeksSnap.docs.map((d) => d.data()).filter(Boolean);
-
-  const agg = {};
-  function ensure(uid, name) {
-    if (!agg[uid]) agg[uid] = { userId: uid, name: name || uid, wins: 0, draws: 0, losses: 0, tablePoints: 0, totalFantasyPoints: 0 };
-    if (name && !agg[uid].name) agg[uid].name = name;
-    return agg[uid];
-  }
-
-  for (const w of allWeekResults) {
-    const isFinal = (w?.status || "final") === "final";
-    if (isFinal) {
-      for (const m of (w.matchups || [])) {
-        const h = ensure(m.homeUserId, nameById[m.homeUserId]);
-        const a = ensure(m.awayUserId, nameById[m.awayUserId]);
-        if (m.homeResult === "W") { h.wins++; h.tablePoints += 3; a.losses++; }
-        else if (m.homeResult === "D") { h.draws++; a.draws++; h.tablePoints++; a.tablePoints++; }
-        else { h.losses++; a.wins++; a.tablePoints += 3; }
-      }
-    }
-    const scores = w.teamScoresByUserId || {};
-    for (const uid2 of Object.keys(scores)) {
-      ensure(uid2, nameById[uid2]).totalFantasyPoints += Number(scores[uid2] || 0);
-    }
-  }
-
-  for (const u of users) ensure(u.userId, u.name);
-  const standings = Object.values(agg).sort((a, b) => (b.tablePoints - a.tablePoints) || (b.totalFantasyPoints - a.totalFantasyPoints));
-
-  await db.doc(`rooms/${roomId}/standings/current`).set(
-    { roomId, updatedAt: admin.firestore.FieldValue.serverTimestamp(), standings },
-    { merge: true }
-  );
+  
+  return { aggStatsByPlayerId, fixtureStatusById, nextKickoffMs, anyInPlay };
 }
 
+// ============================================================================
+// HELPER: Fetches Users and applies Position Fixes
+// ============================================================================
+async function fetchUsersAndLineups(roomId, room) {
+  const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
+  const uids = membersSnap.docs.map(d => d.id);
+  
+  // Fetch Real Positions to fix "FWD marked as MID" issues
+  const playersSnap = await db.collection(`rooms/${roomId}/players`).get();
+  const posMap = {};
+  playersSnap.forEach(doc => {
+      const d = doc.data();
+      if (d.id && d.position) posMap[String(d.id)] = d.position;
+  });
+
+  const users = [];
+  for (const uid of uids) {
+      const [uSnap, tnSnap, linSnap] = await Promise.all([
+          db.doc(`users/${uid}`).get(),
+          db.doc(`rooms/${roomId}/teamNames/${uid}`).get(),
+          db.doc(`rooms/${roomId}/lineups/${uid}`).get()
+      ]);
+
+      const profile = uSnap.data() || {};
+      const teamName = tnSnap.data()?.teamName || "";
+      const display = profile.displayName || uid;
+      
+      const lineup = linSnap.data() || {};
+      let starters = extractStarters(lineup); // Your existing helper
+
+      // APPLY POSITION FIX
+      starters = starters.map(p => ({
+          ...p,
+          position: posMap[String(p.id)] || p.position // Overwrite with DB position
+      }));
+
+      users.push({ userId: uid, name: teamName ? `${display} - ${teamName}` : display, starters });
+  }
+  return users;
+}
+
+// ============================================================================
+// HELPER: Updates Standings (W/L/D)
+// ============================================================================
+async function updateStandings(roomId, users) {
+  const weeksSnap = await db.collection(`rooms/${roomId}/weekResults`).get();
+  const agg = {};
+
+  // Init Aggregation
+  users.forEach(u => {
+      agg[u.userId] = { userId: u.userId, name: u.name, wins: 0, draws: 0, losses: 0, points: 0, fantasy: 0 };
+  });
+
+  weeksSnap.forEach(doc => {
+      const w = doc.data();
+      // Only count finalized weeks OR live weeks (depending on your preference)
+      // Usually, we only count finalized for the table, but live for "Live Standings"
+      
+      // Add Fantasy Points
+      if (w.teamScoresByUserId) {
+          Object.entries(w.teamScoresByUserId).forEach(([uid, score]) => {
+              if (agg[uid]) agg[uid].fantasy += Number(score);
+          });
+      }
+
+      // Add Table Points (W/L/D)
+      if (w.matchups) {
+          w.matchups.forEach(m => {
+              if (!agg[m.homeUserId] || !agg[m.awayUserId]) return;
+              
+              if (m.homeResult === "W") {
+                  agg[m.homeUserId].wins++;
+                  agg[m.homeUserId].points += 3;
+                  agg[m.awayUserId].losses++;
+              } else if (m.homeResult === "D") {
+                  agg[m.homeUserId].draws++;
+                  agg[m.homeUserId].points += 1;
+                  agg[m.awayUserId].draws++;
+                  agg[m.awayUserId].points += 1;
+              } else {
+                  agg[m.homeUserId].losses++;
+                  agg[m.awayUserId].wins++;
+                  agg[m.awayUserId].points += 3;
+              }
+          });
+      }
+  });
+
+  const standings = Object.values(agg).sort((a,b) => (b.points - a.points) || (b.fantasy - a.fantasy));
+  
+  await db.doc(`rooms/${roomId}/standings/current`).set({
+      roomId,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      standings
+  });
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // --- REPAIR TOOL: Populates a week with ALL games from the league ---
+
+exports.debugForceUpdateWeek = onCall(
+  { region: "us-west2", secrets: [APIFOOTBALL_KEY] },
+  async (request) => {
+    // 1. Auth Check
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Sign in required.");
+
+    const { roomId, weekIndex } = request.data;
+    if (!roomId || !weekIndex) throw new HttpsError("invalid-argument", "Missing params.");
+
+    console.log(`[DEBUG] Force updating Room ${roomId} Week ${weekIndex} by User ${uid}`);
+
+    // 2. Run the logic immediately
+    const apiKey = APIFOOTBALL_KEY.value();
+    
+    // This calls your existing worker function
+    await computeAndWriteLiveWeek({ roomId, weekIndex, apiKey });
+
+    // 3. Return the results so you can verify in browser console
+    const resultRef = db.doc(`rooms/${roomId}/weekResults/${weekIndex}`);
+    const snap = await resultRef.get();
+    
+    return { 
+      success: true, 
+      data: snap.data(),
+      message: "Force update complete. Stats saved to DB."
+    };
+  }
+);
+
+
 exports.repairWeekFixtures = onCall(
   { region: "us-west2", secrets: [APIFOOTBALL_KEY] },
   async (request) => {
@@ -1897,9 +2659,9 @@ exports.repairWeekFixtures = onCall(
       .filter((f) => f.id && Number.isFinite(f.kickoffMs))
       .sort((a, b) => a.kickoffMs - b.kickoffMs);
 
-    const fixtureIds = fixtures.map((f) => f.id);
-
-    await weekRef.set(
+    //const fixtureIds = fixtures.map((f) => f.id);
+    const fixtureIds = fixtures.map((f) => String(f.id));
+await weekRef.set(
       {
         fixtures,          // ✅ shape your compute expects
         fixtureIds,
@@ -1917,89 +2679,99 @@ exports.repairWeekFixtures = onCall(
   }
 );
 
-
-// Runs every minute: compute live week results for active rooms
 exports.pollLiveTournamentWeeks = onSchedule(
   { schedule: "*/1 * * * *", timeZone: "America/Los_Angeles", region: "us-west2", secrets: [APIFOOTBALL_KEY] },
   async () => {
     const apiKey = APIFOOTBALL_KEY.value();
+    const nowMs = Date.now();
 
+    // Get all rooms (you can add filters later if you store an "active" flag)
     const roomsSnap = await db.collection("rooms").get();
-    if (roomsSnap.empty) return;
 
     for (const roomDoc of roomsSnap.docs) {
       const roomId = roomDoc.id;
       const room = roomDoc.data() || {};
 
-      // Only rooms that look like they are running a tournament/week system
-      // (Adjust this filter if you want)
-      if (!room) continue;
+      try {
+        const weekIndex = room?.competitionState?.currentWeekIndex ?? room.currentWeekIndex;
+        if (weekIndex == null) continue;
 
-      // Ensure a current week exists (your helper already handles even manager check)
-      const weekIndex = await ensureCurrentWeekIfMissing({ roomId, room, apiKey });
-      if (!weekIndex) continue;
+        const weekRef = db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`);
+        const weekSnap = await weekRef.get();
+        if (!weekSnap.exists) continue;
 
-      // Compute + write live results
-      await computeAndWriteLiveWeek({ roomId, weekIndex, apiKey });
+        const week = weekSnap.data() || {};
+        if (week.status === "final") continue;
+
+        const endAtMs = Number(week.endAtMs);
+        const hardEndAtMs = Number.isFinite(Number(week.hardEndAtMs))
+          ? Number(week.hardEndAtMs)
+          : (Number.isFinite(endAtMs) ? (endAtMs + HARD_END_BUFFER_MS) : NaN);
+
+        // If we are past the hard end, finalize without any API calls.
+        if (Number.isFinite(hardEndAtMs) && nowMs > hardEndAtMs) {
+          await weekRef.set({ status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          await db.doc(`rooms/${roomId}/weekResults/${String(weekIndex)}`).set(
+            {
+              roomId,
+              weekIndex: Number(weekIndex),
+              status: "final",
+              updatedAtMs: Date.now(),
+              computedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+
+          // Step #3: update room competitionState (hard-end finalization path)
+          await db.doc(`rooms/${roomId}`).set(
+            buildCompetitionStateUpdate({
+              weekIndex,
+              label: week.roundLabel || null,
+              weekStatus: "final",
+              isDone: false,
+            }),
+            { merge: true }
+          );
+
+          continue;
+        }
+
+        const fixtures = Array.isArray(week.fixtures) ? week.fixtures : [];
+        if (!fixtures.length) continue;
+
+        // Smart time gate based on kickoff times (no API call needed to decide)
+        const PRE_MS = 20 * 60 * 1000;               // 20 min pre-kickoff
+        const MATCH_RUNTIME_MS = 3 * 60 * 60 * 1000; // ~3 hours match runtime
+        const POST_MS = 20 * 60 * 1000;              // 20 min after
+
+        const shouldRun = fixtures.some((g) => {
+          const koMs = Number(g?.kickoffMs ?? (g?.fixture?.timestamp ? g.fixture.timestamp * 1000 : NaN));
+          if (!Number.isFinite(koMs)) return false;
+          return nowMs >= koMs - PRE_MS && nowMs <= koMs + MATCH_RUNTIME_MS + POST_MS;
+        });
+
+        if (!shouldRun) {
+          // Mark idle for UI (do not overwrite points)
+          await db.doc(`rooms/${roomId}/weekResults/${String(weekIndex)}`).set(
+            {
+              roomId,
+              weekIndex: Number(weekIndex),
+              status: "idle",
+              updatedAtMs: Date.now(),
+              computedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          continue;
+        }
+
+        await computeAndWriteLiveWeek({ roomId, weekIndex: Number(weekIndex), apiKey });
+      } catch (e) {
+        console.error(`Error processing room ${roomId}`, e);
+      }
     }
   }
 );
-
-
-
-//Emails , timers, Market Opens 
-function formatWhen(ms) {
-  return new Date(ms).toLocaleString("en-US", {
-    timeZone: "America/Los_Angeles",
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatDuration(ms) {
-  const totalMin = Math.max(0, Math.floor(ms / 60000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h <= 0) return `${m} min`;
-  if (m === 0) return `${h} hr`;
-  return `${h} hr ${m} min`;
-}
-
-async function getEmailsForUids(uids) {
-  const chunks = [];
-  for (let i = 0; i < uids.length; i += 100) chunks.push(uids.slice(i, i + 100));
-
-  const out = [];
-  for (const chunk of chunks) {
-    const res = await admin.auth().getUsers(chunk.map((uid) => ({ uid })));
-    for (const u of res.users) {
-      if (u.email) out.push({ uid: u.uid, email: u.email, name: u.displayName || "" });
-    }
-  }
-  return out;
-}
-
-async function queueEmails(recipients, subject, html, text, meta) {
-  const batch = db.batch();
-  for (const r of recipients) {
-    const ref = db.collection("mail").doc();
-    batch.set(ref, {
-      to: r.email,
-      message: { subject, html, text },
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      meta: meta || {},
-    });
-  }
-  await batch.commit();
-  return recipients.length;
-}
-
-/**
- * Draft scheduling: sets startAt + creates reminder doc + queues "Draft Scheduled" email now
- */
 exports.scheduleDraft = onCall({ region: "us-west2" }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Login required.");
 

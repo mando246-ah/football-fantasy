@@ -29,7 +29,6 @@ import { onAuthStateChanged } from "firebase/auth";
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-//import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Users, Trophy, Medal} from "lucide-react";
 import Marketplace from "../components/ui/Marketplace";
 import { seedRoomPlayers } from "../firebase";
@@ -81,7 +80,7 @@ const MOCK_PLAYERS = [
   { id: "ederson", name: "Ederson", position: "GK" },
 ];
 
-//Email
+
 
 const fnScheduleDraft = httpsCallable(functions, "scheduleDraft");
 
@@ -157,6 +156,12 @@ function nextWeekdayISO(targetDow, timeZone = "America/Los_Angeles") {
   }
 }
 
+const DRAFT_SIZE_LEAGUE = 16; // Regular leagues 
+const DRAFT_SIZE_CUP = 20;    // Cups / World Cup mode
+
+function draftSizeForCompetitionType(type) {
+  return String(type || "").toLowerCase() === "cup" ? DRAFT_SIZE_CUP : DRAFT_SIZE_LEAGUE;
+}
 
 
 export default function DraftWithPresence() {
@@ -286,7 +291,7 @@ export default function DraftWithPresence() {
         hostUid: user.uid,
         members: initialMembers,
         turnIndex: 0,
-        totalRounds: 16,                                  //<-------------------------------------change here for total rounds
+                totalRounds: DRAFT_SIZE_LEAGUE, // <-- change draft size defaults above
         draftPlan: null,
         started: false,
         startAt: null,
@@ -294,10 +299,6 @@ export default function DraftWithPresence() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-
-      // hard-coded for now
-      const competition = { provider: "api-football", league: 2, season: 2025, timezone: "America/Los_Angeles" };
-      await updateDoc(doc(db, "rooms", key), { competition });
 
       // Create the fast “mirrors” (these are quick)
       await setDoc(
@@ -319,30 +320,19 @@ export default function DraftWithPresence() {
         { merge: true }
       );
 
-      // ✅ CONNECT IMMEDIATELY (this makes UI feel instant)
+      // CONNECT IMMEDIATELY (this makes UI feel instant)
       setRoomKeyInput(key);
       setRoomId(key);
 
-      // ✅ seed players WITHOUT blocking UI
-      const tz = "America/Los_Angeles";
-      const fixtureDate = nextWeekdayISO(3, tz); // 3 = Wednesday
+      await updateDoc(doc(db, "rooms", key), {
+      competition: null,
+      competitionMeta: null,
+      competitionLocked: false,
+      status: "waiting_competition",
+      playerCount: 0,
+      updatedAt: serverTimestamp(),
+    });
 
-      setSeedingPlayers(true);
-      const seedFn = httpsCallable(functions, "seedPlayersFromCompetition");
-      seedFn({
-        roomId: key,
-        league: 2,
-        season: 2025,
-        fixtureDate,          // ✅ NEW
-        timezone: tz,         // ✅ NEW
-        maxPagesPerTeam: 2,   // ✅ NEW (usually plenty)
-      })
-        .then(() => setSeedingPlayers(false))
-        .catch((e) => {
-          console.error(e);
-          setSeedingPlayers(false);
-          alert("Room created, but fetching players failed. Check Functions logs.");
-        });
     } catch (e) {
       console.error(e);
       alert("Failed to create room. Check console for details.");
@@ -414,6 +404,11 @@ export default function DraftWithPresence() {
   async function startNow() {
     if (!user || !room) return;
     if (room.hostUid !== user.uid) return alert("Only host can start");
+
+    if (!poolReady) {
+      return alert("Pick + lock a competition and load players before starting the draft.");
+    }
+
     try {
       await callStartDraftNow({ roomId });
     } catch (e) {
@@ -450,7 +445,7 @@ export default function DraftWithPresence() {
     const n = order.length;
     if (!n) return null;
     const ti = Number.isFinite(room.turnIndex) ? room.turnIndex : 0;
-    const totalRounds = room.totalRounds ?? 16;
+    const totalRounds = room.totalRounds ?? DRAFT_SIZE_LEAGUE;
     const maxPicks = totalRounds * n;
     if (ti >= maxPicks) return null;
     const roundIndex = Math.floor(ti / n);
@@ -469,7 +464,7 @@ export default function DraftWithPresence() {
     if (!n) return null;
 
     const ti = Number.isFinite(room.turnIndex) ? room.turnIndex : 0;
-    const totalRounds = room.totalRounds ?? 16;
+    const totalRounds = room.totalRounds ?? DRAFT_SIZE_LEAGUE;
     const maxPicks = totalRounds * n;
     if (ti + 1 >= maxPicks) return null;
 
@@ -536,7 +531,7 @@ export default function DraftWithPresence() {
   const isDraftComplete = useMemo(() => {
     const n = room?.draftOrder?.length || room?.members?.length || 0;
     if (!n) return false;
-    const totalRounds = room?.totalRounds ?? 9;
+    const totalRounds = room?.totalRounds ?? DRAFT_SIZE_LEAGUE;
     const ti = Number.isFinite(room?.turnIndex) ? room.turnIndex : 0;
     return ti >= totalRounds * n;
   }, [room]);
@@ -637,6 +632,7 @@ export default function DraftWithPresence() {
 
   //Draft Name 
   const isHost = user?.uid && room?.hostUid === user.uid;
+  const poolReady = room?.status === "ready_to_draft" && (poolPlayers?.length || 0) > 0;
 
   const [isEditingDraftName, setIsEditingDraftName] = useState(false);
   const [draftNameInput, setDraftNameInput] = useState("");
@@ -836,6 +832,22 @@ export default function DraftWithPresence() {
                   <CardTitle className="font-sporty text-2xl">📊 Draft Status</CardTitle>
                 </CardHeader>
                 <CardContent>
+                  <div className="mt-6">
+                  
+                  <LeagueSelector
+                    roomId={roomId}
+                    room={room}
+                    isHost={isHost}
+                    poolCount={poolPlayers.length}
+                    setSeedingPlayers={setSeedingPlayers}
+                  />
+                 
+                  {!isHost && (
+                    <div className="mt-4 text-center text-gray-500 text-sm">
+                      Waiting for host to start...
+                    </div>
+                  )}
+                </div>
                   <p className="text-sm mb-3">
                     {room.startAt ? "Scheduled" : "Not scheduled"} • Turn: {room.turnIndex ?? 0}
                   </p>
@@ -859,7 +871,8 @@ export default function DraftWithPresence() {
                       setStartLocalISO={setStartLocalISO}
                       scheduleStart={scheduleStart}
                       startNow={startNow}
-                      seedingPlayers={seedingPlayers}
+                      seedingPlayers={seedingPlayers || room?.status === "seeding_players"}
+                      canStart={poolReady}
                     />
                   ) : (
                     <p className="text-sm opacity-90">
@@ -883,7 +896,7 @@ export default function DraftWithPresence() {
               <div className="rounded-2xl border border-slate-200 p-4 bg-white shadow-sm">
                 <div className="font-semibold">{room.name} — {room.code || roomId}</div>
                 <div className="text-sm opacity-70">
-                  Round: <b>{Math.floor((room.turnIndex ?? 0) / (room.members?.length || 1)) + 1}</b> / {room.totalRounds ?? 9}
+                  Round: <b>{Math.floor((room.turnIndex ?? 0) / (room.members?.length || 1)) + 1}</b> / {room.totalRounds ?? DRAFT_SIZE_LEAGUE}
                 </div>
                 <div className="mt-2 text-sm">Required slot: <b>{requiredSlot || "-"}</b></div>
                 <div className="draftTurnBanner">
@@ -1030,7 +1043,7 @@ export default function DraftWithPresence() {
 }
 
 // ----- Subcomponents -----
-function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow, seedingPlayers }) {
+function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow, seedingPlayers, canStart }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-center gap-2">
       <input
@@ -1042,15 +1055,25 @@ function HostControls({ startLocalISO, setStartLocalISO, scheduleStart, startNow
       <button onClick={scheduleStart} disabled={seedingPlayers} className="ff-btn ff-btn--warn">
         {seedingPlayers ? "Fetching players..." : "Schedule"}
       </button>
+
       <button
-       onClick={startNow}
-       disabled={seedingPlayers}
-       className="ff-btn ff-btn--primary">
+        onClick={startNow}
+        disabled={seedingPlayers || !canStart}
+        className="ff-btn ff-btn--primary"
+        title={!canStart ? "Load players first" : "Start draft"}
+      >
         {seedingPlayers ? "Fetching players..." : "Start Draft Now"}
       </button>
+
+      {!canStart ? (
+        <div className="text-xs opacity-80">
+          Select + lock a competition and load players first.
+        </div>
+      ) : null}
     </div>
   );
 }
+
 
 function PlayerPool({
   availablePlayers,
@@ -1132,6 +1155,282 @@ function PlayerPool({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+
+// --- ADD THIS AT THE BOTTOM OF Draft.jsx ---
+function LeagueSelector({ roomId, room, isHost, poolCount, setSeedingPlayers }) {
+  const [queryText, setQueryText] = useState("");
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [season, setSeason] = useState(String(new Date().getFullYear()));
+  const [searching, setSearching] = useState(false);
+  const [locking, setLocking] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+  const [error, setError] = useState("");
+
+  const locked =
+    !!room?.competitionLocked ||
+    room?.status === "seeding_players" ||
+    room?.status === "ready_to_draft" ||
+    !!room?.started;
+
+  // Show what's already locked in (for everyone)
+  useEffect(() => {
+    const c = room?.competition;
+    const m = room?.competitionMeta;
+    if (!c || !m) return;
+
+    setSelected({
+      leagueId: String(c.league),
+      name: m.name,
+      country: m.country,
+      type: m.type,
+      logo: m.logo,
+    });
+    setSeason(String(c.season || ""));
+  }, [room?.competition?.league, room?.competition?.season, room?.competitionMeta?.name]);
+
+  // Debounced API search
+  useEffect(() => {
+    if (!isHost || locked) return;
+
+    const q = queryText.trim();
+    if (q.length < 2) {
+      setResults([]);
+      return;
+    }
+
+    const t = setTimeout(async () => {
+      setSearching(true);
+      setError("");
+      try {
+        const fn = httpsCallable(functions, "searchLeagues");
+        const res = await fn({ query: q });
+        setResults(res.data?.results || []);
+      } catch (e) {
+        console.warn(e);
+        setError("Search failed (did you deploy functions:searchLeagues?)");
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(t);
+  }, [queryText, isHost, locked]);
+
+  // countdown tick
+  useEffect(() => {
+    if (!locking) return;
+    if (countdown <= 0) return;
+
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [locking, countdown]);
+
+  async function doLockAndSeed() {
+    if (!isHost || locked) return;
+    if (!selected?.leagueId) return;
+
+    const leagueIdNum = Number(selected.leagueId);
+    const seasonNum = Number(season);
+    const timezone = "America/Los_Angeles";
+
+    const totalRoundsForComp = draftSizeForCompetitionType(selected.type);
+    try {
+      setSeedingPlayers(true);
+      setError("");
+
+      // Mark as locked + seeding
+      await updateDoc(doc(db, "rooms", roomId), {
+        competition: { provider: "api-football", league: leagueIdNum, season: seasonNum, timezone },
+        competitionMeta: {
+          name: selected.name,
+          country: selected.country,
+          type: selected.type,
+          logo: selected.logo,
+        },
+        competitionLocked: true,
+        status: "seeding_players",
+        totalRounds: totalRoundsForComp,
+        playerCount: 0,
+        updatedAt: serverTimestamp(),
+      });
+
+      // Seed players (league paging mode)
+      const seedFn = httpsCallable(functions, "seedPlayersFromCompetition");
+      const res = await seedFn({
+        roomId,
+        league: leagueIdNum,
+        season: seasonNum,
+        timezone,
+        maxPages: 250, // adjust higher if you want a bigger pool
+        maxPlayers: 1500,
+      });
+      alert(`Successfully loaded ${res.data?.written ?? 0} players.`);
+
+      const written = res.data?.written ?? 0;
+
+      await updateDoc(doc(db, "rooms", roomId), {
+        status: "ready_to_draft",
+        playerCount: written,
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || "Failed to seed players.");
+
+      // unlock if failed
+      await updateDoc(doc(db, "rooms", roomId), {
+        competitionLocked: false,
+        status: "waiting_competition",
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    } finally {
+      setSeedingPlayers(false);
+    }
+  }
+
+  function startLockCountdown() {
+    if (!selected?.leagueId) return;
+    setLocking(true);
+    setCountdown(3);
+    setError("");
+  }
+
+  // when countdown hits 0, lock/seed
+  useEffect(() => {
+    if (!locking) return;
+    if (countdown > 0) return;
+
+    setLocking(false);
+    doLockAndSeed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locking, countdown]);
+
+  const statusLabel =
+    room?.status === "seeding_players"
+      ? "Loading players…"
+      : room?.status === "ready_to_draft"
+      ? "Ready to draft ✅"
+      : "Waiting for competition";
+
+  // Non-host view
+  if (!isHost) {
+    return (
+      <div className="p-4 border border-gray-700 rounded bg-gray-900 mb-6">
+        <div className="text-xs text-gray-400 mb-1">Competition</div>
+        <div className="text-white font-bold">
+          {selected ? `${selected.name} (${season})` : "Host has not selected yet."}
+        </div>
+        <div className="text-xs text-gray-400 mt-2">
+          Status: <b>{statusLabel}</b> • Players loaded: <b>{poolCount}</b>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 border border-gray-700 rounded bg-gray-900 mb-6">
+      <h3 className="font-bold text-white mb-2">Step 1: Choose Competition</h3>
+
+      <div className="text-xs text-gray-400 mb-3">
+        Search leagues/cups (ex: “World Cup”, “Champions League”, “Premier League”), then lock it in.
+      </div>
+
+      {locked ? (
+        <>
+          <div className="text-white font-bold">
+            Locked: {selected ? `${selected.name} (${season})` : "—"}
+          </div>
+          <div className="text-xs text-gray-400 mt-2">
+            Status: <b>{statusLabel}</b> • Players Loaded: <b>{poolCount}</b> • Player Count: <b>{room?.playerCount ?? 0}</b>
+          </div>
+        </>
+      ) : (
+        <>
+          <input
+            className="w-full bg-black text-white border border-gray-600 rounded px-3 py-2 text-sm"
+            placeholder="Search leagues/cups…"
+            value={queryText}
+            onChange={(e) => setQueryText(e.target.value)}
+            disabled={locking}
+          />
+
+          <div className="mt-2 flex gap-2 items-center">
+            <input
+              className="bg-black text-white border border-gray-600 rounded px-3 py-2 text-sm w-28"
+              value={season}
+              onChange={(e) => setSeason(e.target.value)}
+              placeholder="Season"
+              disabled={locking}
+            />
+
+            <button
+              className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded text-sm font-bold disabled:opacity-50"
+              onClick={startLockCountdown}
+              disabled={!selected?.leagueId || locking}
+            >
+              Lock In
+            </button>
+
+            {locking ? (
+              <button
+                className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded text-sm font-bold"
+                onClick={() => {
+                  setLocking(false);
+                  setCountdown(0);
+                }}
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+
+          {locking ? (
+            <div className="mt-2 text-sm text-amber-300 font-bold">
+              Locking in: {countdown}…
+            </div>
+          ) : null}
+
+          {searching ? <div className="mt-2 text-xs text-gray-400">Searching…</div> : null}
+          {error ? <div className="mt-2 text-xs text-red-300">{error}</div> : null}
+
+          {/* Results */}
+          {results.length ? (
+            <div className="mt-3 border border-gray-700 rounded overflow-hidden">
+              {results.map((r) => (
+                <button
+                  key={r.leagueId}
+                  className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-800 flex justify-between"
+                  onClick={() => {
+                    setSelected(r);
+                    setSeason(String(r.currentSeason || r.seasons?.[0] || season));
+                    setResults([]);
+                    setQueryText(`${r.name}`);
+                  }}
+                >
+                  <span>
+                    <b>{r.name}</b> <span className="text-gray-400">• {r.country} • {r.type}</span>
+                  </span>
+                  <span className="text-gray-400">{r.currentSeason || ""}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="mt-3 text-xs text-gray-400">
+            Selected:{" "}
+            <b className="text-white">
+              {selected ? `${selected.name} (${season})` : "—"}
+            </b>{" "}
+            • Players loaded: <b className="text-white">{poolCount}</b>
+          </div>
+        </>
+      )}
     </div>
   );
 }

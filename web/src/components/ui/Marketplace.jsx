@@ -431,7 +431,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
   return (
     <div className="marketCard">
       <div className="marketHeader">
-        <h2 className="text-xl font-bold">Marketplace</h2>
+        <h2 className="text-xl font-bold">Transfer Market</h2>
         <div className="text-sm">
           {market?.status === "open" ? (
             <span className="marketBadge marketBadgeOpen">Open • {countdown ?? "—"}</span>
