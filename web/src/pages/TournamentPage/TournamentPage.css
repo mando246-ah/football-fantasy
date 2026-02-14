@@ -974,3 +974,66 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Other matchups expandable rows */
+.tpOtherMatchupItem{
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}
+.tpOtherMatchupItem:last-child{ border-bottom: none; }
+
+.tpOtherMatchupTop{
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tpOtherMatchupTop:hover{
+  background: rgba(255,255,255,0.05);
+}
+
+.tpOtherScore{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.tpOtherMatchupBody{
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.03);
+}
+
+/* Header meta now lives under Window (left side) */
+.tpHeaderMetaBlock{
+  margin-top: -6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tpRoomMeta{
+  text-align: left;
+  white-space: normal;   /* allow wrapping */
+  color: rgba(255,255,255,0.78);
+}
+
+.tpLiveHeaderLine{
+  color: rgba(255,255,255,0.72);
+}
+
+.tpHeaderButtons{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}

@@ -5,9 +5,6 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 admin.initializeApp();
 const db = admin.firestore();
 
-// Week fixture lock: safety buffer so postponed matches don't keep a week open forever.
-const HARD_END_BUFFER_MS = 24 * 60 * 60 * 1000; // 24h
-
 //API
 const { defineSecret } = require("firebase-functions/params");
 const APIFOOTBALL_KEY = defineSecret("APIFOOTBALL_KEY");
@@ -36,39 +33,6 @@ async function apiFootballGet(path, params, apiKey) {
 function isHost(room, uid) {
   return !!room?.hostUid && room.hostUid === uid;
 }
-
-function derivePhaseLabel(roundLabel) {
-  const s = String(roundLabel || "").toLowerCase();
-  if (!s) return null;
-
-  // Simple normalization for display (can be expanded later)
-  if (s.includes("group")) return "Group Stage";
-  if (s.includes("league phase") || s.includes("league")) return "League Phase";
-  if (s.includes("play-off") || s.includes("playoff")) return "Playoffs";
-  if (s.includes("round of 32") || s.includes("32")) return "Round of 32";
-  if (s.includes("round of 16") || s.includes("16")) return "Round of 16";
-  if (s.includes("quarter")) return "Quarter-finals";
-  if (s.includes("semi")) return "Semi-finals";
-  if (s.includes("final")) return "Final";
-  if (s.includes("regular season")) return "Regular Season";
-  return roundLabel; // fallback to raw label
-}
-
-function buildCompetitionStateUpdate({ weekIndex, label, weekStatus, isDone }) {
-  return {
-    competitionState: {
-      currentWeekIndex: Number(weekIndex),
-      currentLabel: label ?? null,
-      phaseLabel: derivePhaseLabel(label) ?? null,
-      weekStatus: weekStatus ?? null,
-      isDone: Boolean(isDone),
-      updatedAtMs: Date.now(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
-  };
-}
-
-
 
 //Tournament 
 function toPos(pos) {
@@ -344,16 +308,6 @@ exports.seedPlayersFromCompetition = onCall(
         league: Number(leagueId),
         season: Number(season),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      },
-      // Step #3: room-level competition lifecycle state
-      competitionState: {
-        currentWeekIndex: null,
-        currentLabel: null,
-        phaseLabel: null,
-        weekStatus: null,
-        isDone: false,
-        updatedAtMs: Date.now(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       status: "seeding_players" // UI can show a spinner based on this
     }, { merge: true });
@@ -1381,76 +1335,24 @@ exports.createNextWeek = onCall(
     // Round-robin matchups
     const pairs = roundRobinPairings(memberUids, weekIndex);
 
-const weekDoc = {
+    const weekDoc = {
+      index: weekIndex,
+      startAtMs: window.startAtMs,
+      endAtMs: window.endAtMs,
+      roundLabel: window.roundLabel || null,
 
+      // store fixtures so compute can seed stats per fixture
+      fixtures: window.fixtures,
+      fixtureIds: window.fixtures.map((f) => f.id),
 
-  index: weekIndex,
-
-
-  startAtMs: window.startAtMs,
-
-
-  endAtMs: window.endAtMs,
-
-
-  roundLabel: window.roundLabel || null,
-
-
-
-
-
-  // store fixtures so compute can seed stats per fixture
-
-
-  fixtures: window.fixtures,
-
-
-  fixtureIds: window.fixtures.map((f) => f.id),
-
-
-
-
-
-  // Step #2: lock fixture list at creation + hard end safety
-
-
-  fixtureIdsLocked: true,
-
-
-  fixtureIdsLockedAtMs: Date.now(),
-
-
-  hardEndAtMs: Number(window.endAtMs) + HARD_END_BUFFER_MS,
-
-
-
-
-
-  competition,
-
-
-  matchups: pairs,
-
-
-  status: "scheduled",
-
-
-  createdAt: admin.firestore.FieldValue.serverTimestamp(),
-
-
-};
+      competition,
+      matchups: pairs,
+      status: "scheduled",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
 
     await db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`).set(weekDoc, { merge: true });
-    await roomRef.set({
-      currentWeekIndex: weekIndex,
-      competition,
-      ...buildCompetitionStateUpdate({
-        weekIndex,
-        label: weekDoc.roundLabel || null,
-        weekStatus: "scheduled",
-        isDone: false,
-      }),
-    }, { merge: true });
+    await roomRef.set({ currentWeekIndex: weekIndex, competition }, { merge: true });
 
     return { ok: true, weekIndex, ...window };
   }
@@ -1476,10 +1378,6 @@ exports.computeWeekResults = onCall({ region: "us-west2" }, async (request) => {
   const week = weekSnap.data() || {};
   const startAtMs = Number(week.startAtMs);
   const endAtMs = Number(week.endAtMs);
-
-  const hardEndAtMs = Number.isFinite(Number(week.hardEndAtMs))
-    ? Number(week.hardEndAtMs)
-    : (Number.isFinite(endAtMs) ? (endAtMs + HARD_END_BUFFER_MS) : NaN);
 
   const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
   const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean).sort();
@@ -1826,105 +1724,6 @@ function isFinished(short) {
 }
 
 // ---------------- Live Week Compute (API stats) ----------------
-
-// Step #4: Auto-advance (server-side) — when a week becomes final, create the next week automatically
-// for non-World Cup modes. This keeps Bundesliga/UCL moving without a manual "Create Next Week" button.
-async function autoAdvanceNextWeekIfNeeded({ roomId, apiKey, fromWeekIndex }) {
-  const roomRef = db.doc(`rooms/${roomId}`);
-  const roomSnap = await roomRef.get();
-  if (!roomSnap.exists) return;
-
-  const room = roomSnap.data() || {};
-  const mode = String(room?.competitionMode || "LEAGUE_SEASON").toUpperCase();
-  if (mode === "WORLD_CUP_GROUPS") return; // Step #5 will handle World Cup window weeks separately
-
-  // require even managers
-  const membersSnap = await db.collection(`rooms/${roomId}/members`).get();
-  const memberUids = membersSnap.docs.map((d) => d.id).filter(Boolean);
-  if (memberUids.length < 2 || memberUids.length % 2 !== 0) return;
-
-  const nextWeekIndex = Number(fromWeekIndex) + 1;
-  if (!Number.isFinite(nextWeekIndex) || nextWeekIndex < 1) return;
-
-  const nextWeekRef = db.doc(`rooms/${roomId}/weeks/${String(nextWeekIndex)}`);
-  const nextWeekSnap = await nextWeekRef.get();
-
-  // If already created, ensure room points to it and return
-  if (nextWeekSnap.exists) {
-    const next = nextWeekSnap.data() || {};
-    await roomRef.set(
-      {
-        currentWeekIndex: nextWeekIndex,
-        competition: room.competition || next.competition || null,
-        ...buildCompetitionStateUpdate({
-          weekIndex: nextWeekIndex,
-          label: next.roundLabel || null,
-          weekStatus: next.status || "scheduled",
-          isDone: false,
-        }),
-      },
-      { merge: true }
-    );
-    return;
-  }
-
-  // Competition config (room must already have one chosen)
-  const competition = room.competition;
-  if (!competition?.league || !competition?.season) return;
-
-  const fallbackDate = room?.seedFilter?.fixtureDate || null;
-  const window = await fetchNextRoundWindow(competition, { fallbackDate });
-  if (!window) return; // no upcoming fixtures
-
-  const pairs = roundRobinPairings(memberUids, nextWeekIndex);
-
-  const weekDoc = {
-    index: nextWeekIndex,
-    startAtMs: window.startAtMs,
-    endAtMs: window.endAtMs,
-    roundLabel: window.roundLabel || null,
-
-    fixtures: window.fixtures,
-    fixtureIds: window.fixtures.map((f) => f.id),
-
-    fixtureIdsLocked: true,
-    fixtureIdsLockedAtMs: Date.now(),
-    hardEndAtMs: Number(window.endAtMs) + HARD_END_BUFFER_MS,
-
-    competition,
-    matchups: pairs,
-    status: "scheduled",
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    autoAdvancedFromWeekIndex: Number(fromWeekIndex),
-  };
-
-  // Use create() for idempotency (won't overwrite if it somehow exists)
-  try {
-    await nextWeekRef.create(weekDoc);
-  } catch (e) {
-    // If another invocation created it first, that's fine.
-    const msg = String(e?.message || "");
-    if (!msg.includes("ALREADY_EXISTS") && !msg.includes("already exists") && e?.code !== 6) {
-      console.warn("autoAdvanceNextWeekIfNeeded create failed:", e);
-      return;
-    }
-  }
-
-  await roomRef.set(
-    {
-      currentWeekIndex: nextWeekIndex,
-      competition,
-      ...buildCompetitionStateUpdate({
-        weekIndex: nextWeekIndex,
-        label: weekDoc.roundLabel || null,
-        weekStatus: "scheduled",
-        isDone: false,
-      }),
-    },
-    { merge: true }
-  );
-}
-
 async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
   if (!roomId || !Number.isFinite(Number(weekIndex))) return;
 
@@ -1971,12 +1770,24 @@ async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
   const statusByFixtureId = await getFixtureStatusMap({ fixtureIds, timezone, apiKey });
 
   // Fill missing statuses from previous write (prevents flapping on sparse API returns)
-  // IMPORTANT: only carry forward stable statuses (NS / finished). Don't keep an old "in-play" status forever.
+  // We always carry forward stable statuses (NS / finished).
+  // For in-play statuses, we carry forward only while we're still within a reasonable match runtime window
+  // (this avoids "LIVE → IDLE → LIVE" flapping when the API returns sparse/empty status payloads).
+  const MATCH_RUNTIME_MS = 135 * 60 * 1000; // 2h15m (covers ET most of the time)
   for (const fId of fixtureIds) {
     const k = String(fId);
     const prevShort = prevFixtureStatusById[k] || null;
+
     if (!statusByFixtureId[k] && prevShort && (prevShort === "NS" || isFinished(prevShort))) {
       statusByFixtureId[k] = prevShort;
+      continue;
+    }
+
+    if (!statusByFixtureId[k] && prevShort && isInPlay(prevShort)) {
+      const ko = kickoffMsByFixtureId[k];
+      if (Number.isFinite(ko) && now >= ko && now <= ko + MATCH_RUNTIME_MS) {
+        statusByFixtureId[k] = prevShort;
+      }
     }
   }
 
@@ -1985,12 +1796,13 @@ async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
     ? fixtureIds.every((id) => isFinished(statusByFixtureId[String(id)] || "") || statusByFixtureId[String(id)] === "NS")
     : false;
 
-  const pastHardEnd = Number.isFinite(hardEndAtMs) && now > hardEndAtMs;
-  const shouldFinalize = (!anyInPlay) && (
-    (Number.isFinite(endAtMs) && now > endAtMs + POST_WINDOW_MS && allFinished) ||
-    pastHardEnd
-  );
-  const statusValue = shouldFinalize ? "final" : (anyInPlay ? "live" : "idle");
+  const inRuntimeWindow = fixtureIds.some((id) => {
+    const ko = kickoffMsByFixtureId[String(id)];
+    return Number.isFinite(ko) && now >= ko && now <= ko + MATCH_RUNTIME_MS;
+  });
+
+  const shouldFinalize = Number.isFinite(endAtMs) && now > endAtMs + POST_WINDOW_MS && !anyInPlay && allFinished;
+  const statusValue = shouldFinalize ? "final" : ((anyInPlay || inRuntimeWindow) ? "live" : "idle");
 
   // Next kickoff (for UI + scheduling hints)
   let nextKickoffMs = null;
@@ -2135,6 +1947,23 @@ async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
     breakdownByUserId[u.userId] = scored;
   }
 
+  // Guard (per-user): never drop an individual user's total from >0 to 0 mid-week due to a partial API payload.
+  // This happens when the API returns stats for some fixtures/players but not others on a given poll.
+  // We keep the previous total for that user until we can recompute with non-empty stats again (or until finalization).
+  if (!forceRecompute && !shouldFinalize) {
+    const prevBreakdowns = prevResults.breakdownByUserId || {};
+    for (const [uid, prevVal] of Object.entries(prevTotals)) {
+      const pv = Number(prevVal || 0);
+      const cv = Number(totalsByUid[uid] || 0);
+      if (pv > 0 && cv === 0) {
+        totalsByUid[uid] = pv;
+        if (prevBreakdowns[uid] && !breakdownByUserId[uid]) {
+          breakdownByUserId[uid] = prevBreakdowns[uid];
+        }
+      }
+    }
+  }
+
   // Guard: never overwrite previously non-zero totals with all-zeros due to an API hiccup/empty stats payload.
   // Fantasy points can fluctuate up/down slightly (cards, etc.), but a full drop to 0 after having points is almost always wrong.
   const computedHadPoints = Object.values(totalsByUid).some((v) => Number(v) > 0);
@@ -2264,27 +2093,14 @@ async function computeAndWriteLiveWeek({ roomId, weekIndex, apiKey }) {
     },
     { merge: true }
   );
-  if (shouldFinalize && week.status !== "final") {
+
+  if (shouldFinalize) {
     await weekRef.set(
       { status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     );
-
-    // Step #3: mark room competitionState as finalized for this week (single write on transition)
-    const roomRef = db.doc(`rooms/${roomId}`);
-    await roomRef.set(
-      buildCompetitionStateUpdate({
-        weekIndex,
-        label: week.roundLabel || null,
-        weekStatus: "final",
-        isDone: false,
-      }),
-      { merge: true }
-    );
-
-    // Step #4: auto-create next week (Bundesliga/UCL) once this week finalizes
-    await autoAdvanceNextWeekIfNeeded({ roomId, apiKey, fromWeekIndex: Number(weekIndex) });
   }
+
   // Clear force flag if it was set
   if (prevResults.forceRecompute) {
     await weekResultsRef.set({ forceRecompute: admin.firestore.FieldValue.delete() }, { merge: true });
@@ -2336,11 +2152,7 @@ async function ensureCurrentWeekIfMissing({ roomId, room, apiKey }) {
   };
 
   await db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`).set(weekDoc, { merge: true });
-  await db.doc(`rooms/${roomId}`).set({
-    currentWeekIndex: weekIndex,
-    competition,
-    ...buildCompetitionStateUpdate({ weekIndex, label: weekDoc.roundLabel || null, weekStatus: "scheduled", isDone: false }),
-  }, { merge: true });
+  await db.doc(`rooms/${roomId}`).set({ currentWeekIndex: weekIndex, competition }, { merge: true });
 
   // Create an empty weekResults doc so the UI has something immediately.
   await db.doc(`rooms/${roomId}/weekResults/${String(weekIndex)}`).set(
@@ -2693,7 +2505,7 @@ exports.pollLiveTournamentWeeks = onSchedule(
       const room = roomDoc.data() || {};
 
       try {
-        const weekIndex = room?.competitionState?.currentWeekIndex ?? room.currentWeekIndex;
+        const weekIndex = room.currentWeekIndex;
         if (weekIndex == null) continue;
 
         const weekRef = db.doc(`rooms/${roomId}/weeks/${String(weekIndex)}`);
@@ -2703,52 +2515,22 @@ exports.pollLiveTournamentWeeks = onSchedule(
         const week = weekSnap.data() || {};
         if (week.status === "final") continue;
 
-        const endAtMs = Number(week.endAtMs);
-        const hardEndAtMs = Number.isFinite(Number(week.hardEndAtMs))
-          ? Number(week.hardEndAtMs)
-          : (Number.isFinite(endAtMs) ? (endAtMs + HARD_END_BUFFER_MS) : NaN);
-
-        // If we are past the hard end, finalize without any API calls.
-        if (Number.isFinite(hardEndAtMs) && nowMs > hardEndAtMs) {
-          await weekRef.set({ status: "final", finalizedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-          await db.doc(`rooms/${roomId}/weekResults/${String(weekIndex)}`).set(
-            {
-              roomId,
-              weekIndex: Number(weekIndex),
-              status: "final",
-              updatedAtMs: Date.now(),
-              computedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-
-          // Step #3: update room competitionState (hard-end finalization path)
-          await db.doc(`rooms/${roomId}`).set(
-            buildCompetitionStateUpdate({
-              weekIndex,
-              label: week.roundLabel || null,
-              weekStatus: "final",
-              isDone: false,
-            }),
-            { merge: true }
-          );
-
-          continue;
-        }
-
         const fixtures = Array.isArray(week.fixtures) ? week.fixtures : [];
         if (!fixtures.length) continue;
 
         // Smart time gate based on kickoff times (no API call needed to decide)
-        const PRE_MS = 20 * 60 * 1000;               // 20 min pre-kickoff
-        const MATCH_RUNTIME_MS = 3 * 60 * 60 * 1000; // ~3 hours match runtime
-        const POST_MS = 20 * 60 * 1000;              // 20 min after
+        const PRE_MS = 20 * 60 * 1000;        // 20 min pre-kickoff
+        const POST_MS = 3 * 60 * 60 * 1000;   // 3 hrs post-kickoff
 
-        const shouldRun = fixtures.some((g) => {
+        let shouldRun = false;
+        for (const g of fixtures) {
           const koMs = Number(g?.kickoffMs ?? (g?.fixture?.timestamp ? g.fixture.timestamp * 1000 : NaN));
-          if (!Number.isFinite(koMs)) return false;
-          return nowMs >= koMs - PRE_MS && nowMs <= koMs + MATCH_RUNTIME_MS + POST_MS;
-        });
+          if (!Number.isFinite(koMs)) continue;
+          if (nowMs >= koMs - PRE_MS && nowMs <= koMs + POST_MS) {
+            shouldRun = true;
+            break;
+          }
+        }
 
         if (!shouldRun) {
           // Mark idle for UI (do not overwrite points)

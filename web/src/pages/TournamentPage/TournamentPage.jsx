@@ -14,17 +14,29 @@ import { functions } from "../../firebase";
 function fmtDT(v) {
   if (!v) return "—";
 
+  const LOCALE = "en-US";
+  const OPTS = {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  };
+
   // Firestore Timestamp support
   if (typeof v === "object") {
-    if (typeof v.toMillis === "function") return new Date(v.toMillis()).toLocaleString();
-    if (typeof v.seconds === "number") return new Date(v.seconds * 1000).toLocaleString();
+    if (typeof v.toMillis === "function") return new Date(v.toMillis()).toLocaleString(LOCALE, OPTS);
+    if (typeof v.seconds === "number") return new Date(v.seconds * 1000).toLocaleString(LOCALE, OPTS);
   }
 
   // Milliseconds support
   const ms = Number(v);
   if (!Number.isFinite(ms)) return "—";
-  return new Date(ms).toLocaleString();
+  return new Date(ms).toLocaleString(LOCALE, OPTS);
 }
+
 
 function initials(s) {
   const t = String(s || "").trim();
@@ -71,18 +83,29 @@ export default function TournamentPage() {
   const { roomId } = useParams();
   const { loading, error, data } = useTournament(roomId);
   const [myUid, setMyUid] = useState(auth.currentUser?.uid || null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
 
   //const myUid = auth.currentUser?.uid;
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((u) => setMyUid(u?.uid || null));
     return unsub;
+  }, [])
+
+  
+  // UI-only clock (used for the "Live updating" countdown)
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
   }, []);
+
   const isHost = data?.room?.hostUid === myUid;
 
   // Firestore live docs for the new "Weeks" system
   const [currentWeekIndex, setCurrentWeekIndex] = useState(null);
   const [weekDoc, setWeekDoc] = useState(null);
   const [weekResults, setWeekResults] = useState(null);
+  const [stableWeekResults, setStableWeekResults] = useState(null);
   const [standingsDoc, setStandingsDoc] = useState(null);
   const [bootingWeek, setBootingWeek] = useState(false);
   const [bootWeekErr, setBootWeekErr] = useState(null);
@@ -91,6 +114,25 @@ export default function TournamentPage() {
   const [showScoring, setShowScoring] = useState(false);
   const [forcingUpdate, setForcingUpdate] = useState(false);
   const [creatingNextWeek, setCreatingNextWeek] = useState(false);
+
+
+  // Other Matchups expand/collapse (separate from main matchup player expand)
+  const [expandedOtherMatchupKey, setExpandedOtherMatchupKey] = useState(null);
+  const [expandedOtherPlayer, setExpandedOtherPlayer] = useState({ matchupKey: null, playerId: null });
+
+  const toggleOtherMatchup = (matchupKey) => {
+    setExpandedOtherMatchupKey((prev) => (prev === matchupKey ? null : matchupKey));
+    // close any open player card inside other matchups when switching
+    setExpandedOtherPlayer({ matchupKey: null, playerId: null });
+  };
+
+  const toggleOtherPlayer = (matchupKey, pid) => {
+    setExpandedOtherPlayer((prev) => {
+      const same = prev.matchupKey === matchupKey && prev.playerId === pid;
+      return same ? { matchupKey: null, playerId: null } : { matchupKey, playerId: pid };
+    });
+  };
+
 
   const togglePlayer = (pid) => {
     setExpandedPlayerId(expandedPlayerId === pid ? null : pid);
@@ -122,6 +164,7 @@ export default function TournamentPage() {
         setRepairing(false);
       }
     }
+
 
   async function forceUpdateThisWeek() {
     if (!isHost) return;
@@ -165,6 +208,7 @@ export default function TournamentPage() {
       alert("Could not copy. Room code: " + String(roomId));
     }
   }
+
 
 
   useEffect(() => {
@@ -239,6 +283,37 @@ export default function TournamentPage() {
       };
     }, [roomId, currentWeekIndex]);
 
+  // Keep UI totals stable if Firestore briefly returns an empty/zero snapshot
+  useEffect(() => {
+    if (!weekResults) return;
+
+    setStableWeekResults((prev) => {
+      const next = weekResults;
+
+      // Reset cache on week change
+      if (!prev || Number(prev.weekIndex) !== Number(next.weekIndex)) return next;
+
+      const prevTotals = prev.teamScoresByUserId || {};
+      const nextTotals = next.teamScoresByUserId || {};
+      const prevHasPoints = Object.values(prevTotals).some((v) => Number(v) > 0);
+      const nextHasPoints = Object.values(nextTotals).some((v) => Number(v) > 0);
+
+      // If we had points and the next snapshot looks like a temporary reset, keep the previous totals/breakdown.
+      // (Helps prevent the "points -> 0 -> back" flicker.)
+      if (prevHasPoints && !nextHasPoints && String(next.status || "").toLowerCase() !== "scheduled") {
+        return {
+          ...next,
+          teamScoresByUserId: prevTotals,
+          breakdownByUserId: prev.breakdownByUserId || next.breakdownByUserId,
+          matchups: (Array.isArray(next.matchups) && next.matchups.length) ? next.matchups : (prev.matchups || next.matchups),
+          weekLeaderboard: (Array.isArray(next.weekLeaderboard) && next.weekLeaderboard.length) ? next.weekLeaderboard : (prev.weekLeaderboard || next.weekLeaderboard),
+        };
+      }
+
+      return next;
+    });
+  }, [weekResults]);
+
     useEffect(() => {
     if (!roomId) return;
     if (loading) return;
@@ -309,7 +384,20 @@ export default function TournamentPage() {
 
 
   // Prefer week results if present; fallback to old results (Option A)
-  const activeResults = weekResults || null;
+  const activeResults = stableWeekResults || weekResults || null;
+
+  // --- Live Updating display (header) ---
+  const resultsStatusRaw = activeResults?.status ?? "";
+  const resultsStatus = String(resultsStatusRaw).toLowerCase();
+
+  let lastUpdateMs = null;
+  if (activeResults?.updatedAtMs) lastUpdateMs = Number(activeResults.updatedAtMs);
+  else if (activeResults?.computedAt?.toMillis) lastUpdateMs = activeResults.computedAt.toMillis();
+  else if (activeResults?.computedAt?.seconds) lastUpdateMs = activeResults.computedAt.seconds * 1000;
+
+  const ageSec = lastUpdateMs ? Math.max(0, Math.floor((nowMs - lastUpdateMs) / 1000)) : null;
+  const nextUpdateInSec = lastUpdateMs ? Math.max(0, 60 - (ageSec % 60)) : null;
+  const lastUpdateLabel = lastUpdateMs ? fmtDT(lastUpdateMs) : "—";
 
   if (!activeResults) {
     const baseRows = (data?.users || []).map((u) => ({
@@ -411,6 +499,16 @@ export default function TournamentPage() {
     );
   }
 
+
+  const me = users.find((u) => u.userId === myUid) || users[0];
+  const myTotal = activeResults?.teamScoresByUserId?.[myUid] ?? 0;
+
+  // No useMemo (avoids hook-order problems)
+  const nameById = Object.fromEntries(users.map((u) => [u.userId, u.name]));
+
+  // Matchups source:
+  // - Prefer matchups written into weekResults (when available)
+  // - Fallback to the week doc's matchups so "Your Matchup" shows immediately after Next Week
   const matchupsAllRaw =
     activeResults?.matchups?.length ? activeResults.matchups : weekDoc?.matchups || [];
 
@@ -428,17 +526,10 @@ export default function TournamentPage() {
   });
 
 
-  const me = users.find((u) => u.userId === myUid) || users[0];
-  const myTotal = activeResults.teamScoresByUserId?.[me?.userId] ?? 0;
-
-  // No useMemo (avoids hook-order problems)
-  const nameById = Object.fromEntries(users.map((u) => [u.userId, u.name]));
-
   const myMatchup =
-  matchupsAll.find(
-    (m) => m.homeUserId === me?.userId || m.awayUserId === me?.userId
-  ) || null;
-
+    matchupsAll.find(
+      (m) => m.homeUserId === me?.userId || m.awayUserId === me?.userId
+    ) || null;
 
   const myBreakdown = activeResults.breakdownByUserId?.[me?.userId];
 
@@ -452,11 +543,9 @@ export default function TournamentPage() {
   const oppTotal = opponentUid ? activeResults.teamScoresByUserId?.[opponentUid] ?? 0 : 0;
   const oppBreakdown = opponentUid ? activeResults.breakdownByUserId?.[opponentUid] : null;
 
-  const otherMatchups =
-  matchupsAll.filter(
-    (m) => m.homeUserId !== me?.userId && m.awayUserId !== me?.userId
-  ) || [];
-
+  const otherMatchups = matchupsAll.filter(
+      (m) => m.homeUserId !== me?.userId && m.awayUserId !== me?.userId
+    ) || [];
 
   const boardRows = activeResults.weekLeaderboard || activeResults.leaderboard || [];
   const standingsRows = standingsDoc?.standings || [];
@@ -480,10 +569,9 @@ export default function TournamentPage() {
               ) : null}
             </p>
           )}
-        </div>
 
-        <div className="tpHeaderRight" ref={scoringRef}>
-          <div className="tpHeaderRightTop">
+          {/* ✅ MOVE THIS UNDER WINDOW */}
+          <div className="tpHeaderMetaBlock">
             <div className="tpRoomMeta">
               Room: <b>{roomId}</b>
               {currentWeekIndex != null ? (
@@ -491,11 +579,30 @@ export default function TournamentPage() {
                   {" "}
                   • Week: <b>{currentWeekIndex}</b>
                 </>
-              ) : null}
-              {" "}
+              ) : null}{" "}
               • Your Total: <b>{myTotal}</b>
             </div>
 
+            <div className="tpLiveHeaderLine">
+              {resultsStatus === "live" ? (
+                <span>
+                  <b>Live Updating</b>
+                  {nextUpdateInSec != null ? <> • Next update in: <b>{nextUpdateInSec}s</b></> : null}
+                  <> • Last update at: <b>{lastUpdateLabel}</b></>
+                </span>
+              ) : (
+                <span>
+                  Status: <b>{String(resultsStatusRaw || "idle").toUpperCase()}</b>
+                  <> • Last update at: <b>{lastUpdateLabel}</b></>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ✅ RIGHT SIDE = ONLY BUTTONS */}
+        <div className="tpHeaderRight" ref={scoringRef}>
+          <div className="tpHeaderButtons">
             <button
               type="button"
               className="tpScoringBtn"
@@ -521,6 +628,7 @@ export default function TournamentPage() {
                     {forcingUpdate ? "Updating..." : "Refresh Stats"}
                   </button>
 
+
                   <button
                     type="button"
                     className="tpToolsItem"
@@ -529,6 +637,7 @@ export default function TournamentPage() {
                   >
                     {creatingNextWeek ? "Creating..." : "Next Week"}
                   </button>
+
 
                   <button
                     type="button"
@@ -539,14 +648,14 @@ export default function TournamentPage() {
                     {repairing ? "Repairing..." : "Repair Fixtures"}
                   </button>
 
+
                   <button type="button" className="tpToolsItem" onClick={copyRoomCode}>
                     Copy Room Code
                   </button>
                 </div>
               </details>
             )}
-
-            </div>
+          </div>
 
           {showScoring && (
             <div className="tpScoringPopover" role="dialog" aria-label="Scoring rules">
@@ -563,6 +672,7 @@ export default function TournamentPage() {
           )}
         </div>
       </div>
+
     </div>
 
 <div className="tpGrid">
@@ -751,6 +861,14 @@ export default function TournamentPage() {
   ) : (
     <div className="tpMatchup">
       {otherMatchups.map((m) => {
+        const matchupKey = `${m.homeUserId}-${m.awayUserId}`;
+        const isOpen = expandedOtherMatchupKey === matchupKey;
+
+        // full user objects (these include starters)
+        const homeUserFull = users.find((u) => u.userId === m.homeUserId) || null;
+        const awayUserFull = users.find((u) => u.userId === m.awayUserId) || null;
+
+        // chip fallback
         const homeUser = userById[m.homeUserId] || {
           userId: m.homeUserId,
           displayName: nameById[m.homeUserId] || m.homeUserId,
@@ -765,23 +883,158 @@ export default function TournamentPage() {
           photoURL: "",
         };
 
-        return (
-          <div key={`${m.homeUserId}-${m.awayUserId}`} className="tpMatchRow">
-            <div className="tpMatchTeams">
-              <UserChip user={homeUser} />
-              <span className="tpVs">vs</span>
-              <UserChip user={awayUser} />
-            </div>
+        const homeUid = m.homeUserId;
+        const awayUid = m.awayUserId;
 
-            <span className="tpMatchScore">
-              {m.homeTotal} — {m.awayTotal}
-            </span>
+        const homeTotal = m.homeTotal ?? 0;
+        const awayTotal = m.awayTotal ?? 0;
+
+        const homeBreakdown = activeResults?.breakdownByUserId?.[homeUid] || null;
+        const awayBreakdown = activeResults?.breakdownByUserId?.[awayUid] || null;
+
+        return (
+          <div key={matchupKey} className={`tpOtherMatchupItem ${isOpen ? "open" : ""}`}>
+            {/* clickable header row */}
+            <button
+              type="button"
+              className="tpOtherMatchupTop"
+              onClick={() => toggleOtherMatchup(matchupKey)}
+              aria-expanded={isOpen}
+            >
+              <div className="tpMatchTeams">
+                <UserChip user={homeUser} />
+                <span className="tpVs">vs</span>
+                <UserChip user={awayUser} />
+              </div>
+
+              <div className="tpOtherScore">
+                <span className="tpMatchScore">
+                  {homeTotal} — {awayTotal}
+                </span>
+                <span className={`tpCaret ${isOpen ? "open" : ""}`}>▾</span>
+              </div>
+            </button>
+
+            {/* dropdown body */}
+            {isOpen && (
+              <div className="tpOtherMatchupBody">
+                <div className="tpLineups" style={{ marginTop: 0 }}>
+                  {/* HOME SIDE */}
+                  <div className="tpSide">
+                    <div className="tpLineupHead" style={{ marginTop: 0 }}>
+                      <span className="tpLineupName">
+                        <UserChip user={homeUser} />
+                      </span>
+                      <span className="tpLineupTotal">{homeTotal} pts</span>
+                    </div>
+
+                    <ul className="tpList">
+                      {(homeUserFull?.starters || []).map((p) => {
+                        const entry = homeBreakdown?.perPlayer?.[p.id];
+                        const pts = typeof entry === "number" ? entry : entry?.points ?? 0;
+                        const breakdown = typeof entry === "object" ? entry?.breakdown : {};
+                        const stats = typeof entry === "object" ? entry?.stats : {};
+                        const realTeamName = typeof entry === "object" ? entry?.realTeamName : "";
+                        const opponentName = typeof entry === "object" ? entry?.opponentName : "";
+
+                        const isPlayerOpen =
+                          expandedOtherPlayer.matchupKey === matchupKey &&
+                          expandedOtherPlayer.playerId === p.id;
+
+                        return (
+                          <li key={p.id} className={`tpRowWrap ${isPlayerOpen ? "tpRowOpen" : ""}`}>
+                            <div className="tpRow" onClick={() => toggleOtherPlayer(matchupKey, p.id)}>
+                              <div className="tpPlayerInfo">
+                                <span className="tpName">{p.name}</span>
+                              </div>
+
+                              <div className="tpMeta">
+                                {p.position}
+                                <span className={`tpLivePill ${stats?.isLive ? "live" : "idle"}`}>
+                                  {stats?.isLive ? "LIVE" : "IDLE"}
+                                </span>
+                              </div>
+
+                              <div className="tpPts">{pts} pts</div>
+                            </div>
+
+                            {isPlayerOpen && (
+                              <PlayerStatsCard
+                                stats={stats}
+                                breakdown={breakdown}
+                                teamName={realTeamName}
+                                opponentName={opponentName}
+                              />
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+
+                  {/* AWAY SIDE */}
+                  <div className="tpSide">
+                    <div className="tpLineupHead" style={{ marginTop: 0 }}>
+                      <span className="tpLineupName">
+                        <UserChip user={awayUser} />
+                      </span>
+                      <span className="tpLineupTotal">{awayTotal} pts</span>
+                    </div>
+
+                    <ul className="tpList">
+                      {(awayUserFull?.starters || []).map((p) => {
+                        const entry = awayBreakdown?.perPlayer?.[p.id];
+                        const pts = typeof entry === "number" ? entry : entry?.points ?? 0;
+                        const breakdown = typeof entry === "object" ? entry?.breakdown : {};
+                        const stats = typeof entry === "object" ? entry?.stats : {};
+                        const realTeamName = typeof entry === "object" ? entry?.realTeamName : "";
+                        const opponentName = typeof entry === "object" ? entry?.opponentName : "";
+
+                        const isPlayerOpen =
+                          expandedOtherPlayer.matchupKey === matchupKey &&
+                          expandedOtherPlayer.playerId === p.id;
+
+                        return (
+                          <li key={p.id} className={`tpRowWrap ${isPlayerOpen ? "tpRowOpen" : ""}`}>
+                            <div className="tpRow" onClick={() => toggleOtherPlayer(matchupKey, p.id)}>
+                              <div className="tpPlayerInfo">
+                                <span className="tpName">{p.name}</span>
+                              </div>
+
+                              <div className="tpMeta">
+                                {p.position}
+                                <span className={`tpLivePill ${stats?.isLive ? "live" : "idle"}`}>
+                                  {stats?.isLive ? "LIVE" : "IDLE"}
+                                </span>
+                              </div>
+
+                              <div className="tpPts">{pts} pts</div>
+                            </div>
+
+                            {isPlayerOpen && (
+                              <PlayerStatsCard
+                                stats={stats}
+                                breakdown={breakdown}
+                                teamName={realTeamName}
+                                opponentName={opponentName}
+                              />
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
     </div>
   )}
-</div>
+
+  
+  </div>
 
   </div>
     </div>

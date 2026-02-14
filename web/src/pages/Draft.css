@@ -340,3 +340,99 @@
   filter: invert(1);
   opacity: 0.85;
 }
+
+/* ===== All Picks controls + pills ===== */
+.allPicksHeaderRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-top: 16px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.allPicksControls{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap: wrap;
+  justify-content:flex-end;
+}
+
+.allPicksSelect,
+.allPicksSearch{
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.14);
+  padding: 0 10px;
+}
+
+.allPicksSearch{
+  min-width: 220px;
+}
+
+.pickRow{
+  border: 1px solid rgba(0,0,0,0.14);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+}
+
+.pickRowMine{
+  border-color: rgba(34, 211, 238, 0.55);
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.18) inset;
+}
+
+.pickMain{
+  display:inline-flex;
+  align-items:center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pickManagerPill{
+  display:inline-flex;
+  align-items:center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.25);
+  color: rgba(255,255,255,0.95);
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.allPicksSearch{
+  min-width: 220px;
+
+  /* NEW: always-highlighted look */
+  border: 1px solid rgba(34, 211, 238, 0.55);
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.18);
+  background: rgba(0,0,0,0.20);
+  color: rgba(255,255,255,0.92);
+  outline: none;
+}
+
+/* Stronger highlight when focused */
+.allPicksSearch:focus{
+  border-color: rgba(34, 211, 238, 0.85);
+  box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.32);
+}
+
+.allPicksSearch::placeholder{
+  color: rgba(255,255,255,0.55);
+}
+
+.draftedBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.85);
+}

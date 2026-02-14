@@ -11,6 +11,10 @@ import {
   onAuthStateChanged,
   updateProfile,
   signOut,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
 } from "firebase/auth";
 import {
   getFirestore,
@@ -130,6 +134,40 @@ export async function choosePersistenceFromPref() {
     remember ? browserLocalPersistence : browserSessionPersistence
   );
 }
+
+// Google Sign In
+const googleProvider = new GoogleAuthProvider();
+// optional: forces account chooser each time
+googleProvider.setCustomParameters({ prompt: "select_account" });
+
+export async function signInWithGoogleWithPref() {
+  await choosePersistenceFromPref();
+
+  try {
+    // Best UX on desktop
+    return await signInWithPopup(auth, googleProvider);
+  } catch (e) {
+    // Popup blocked or third-party cookie issues → fallback
+    if (e?.code === "auth/popup-blocked" || e?.code === "auth/popup-closed-by-user") {
+      await signInWithRedirect(auth, googleProvider);
+      return null;
+    }
+    throw e;
+  }
+}
+
+// Call this once on app load (e.g., App.jsx useEffect) to complete redirect flow
+export async function completeGoogleRedirectIfAny() {
+  try {
+    const res = await getRedirectResult(auth);
+    return res || null;
+  } catch (e) {
+    // ignore if no redirect is pending
+    if (e?.code === "auth/no-auth-event") return null;
+    throw e;
+  }
+}
+
 
 /* =========================
    Magic link auth helpers

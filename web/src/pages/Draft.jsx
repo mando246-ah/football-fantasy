@@ -120,6 +120,23 @@ function countdownStr(sec) {
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 
+// --- All Picks: stable manager colors ---
+function hashToHue(str = "") {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function managerPillStyle(uid, isMine) {
+  const hue = hashToHue(String(uid || "unknown"));
+  // mine = slightly stronger so it's easier to spot
+  return {
+    backgroundColor: `hsla(${hue}, 90%, 55%, ${isMine ? 0.35 : 0.18})`,
+    borderColor: `hsla(${hue}, 90%, 60%, 0.55)`,
+  };
+}
+
+
 // Returns next occurrence of a weekday as YYYY-MM-DD in a given IANA timezone.
 // targetDow: 0=Sun ... 6=Sat
 function nextWeekdayISO(targetDow, timeZone = "America/Los_Angeles") {
@@ -191,6 +208,8 @@ export default function DraftWithPresence() {
   // Player list UI
   const [posFilter, setPosFilter] = useState("ALL");
   const [search, setSearch] = useState("");
+  const [allPicksPos, setAllPicksPos] = useState("ALL");
+  const [allPicksQuery, setAllPicksQuery] = useState("");
 
   // Countdown + auto-pick
   const [timeLeft, setTimeLeft] = useState(TURN_SECONDS);
@@ -436,6 +455,24 @@ export default function DraftWithPresence() {
     return () => clearInterval(tid);
   }, [room?.startAt, room?.started, roomId]);
 
+  //Drafted players
+  const draftedByPlayerId = useMemo(() => {
+    const map = new Map();
+    for (const p of picks || []) {
+      // adapt if your pick object uses a different key than playerId
+      map.set(String(p.playerId), {
+        managerName: p.displayName || "Someone",
+        turn: p.turn,
+        round: p.round,
+      });
+    }
+    return map;
+  }, [picks]);
+
+  const isPlayerDrafted = (playerId) => draftedByPlayerId.has(String(playerId));
+
+
+
   // Who is on the clock (snake)
   const currentPicker = useMemo(() => {
     if (!room) return null;
@@ -487,6 +524,40 @@ export default function DraftWithPresence() {
   const pickedIds = useMemo(() => new Set(picks.map(p => String(p.playerId))), [picks]);
   const loadingPlayers = !!roomId && poolPlayers.length === 0;
 
+  // All Picks filtering + suggestions (player OR manager)
+  const filteredPicks = useMemo(() => {
+    const q = allPicksQuery.trim().toLowerCase();
+
+    return (picks || []).filter((p) => {
+      if (allPicksPos !== "ALL" && p.position !== allPicksPos) return false;
+      if (!q) return true;
+
+      const player = String(p.playerName || "").toLowerCase();
+      const manager = String(p.displayName || "").toLowerCase();
+
+      return player.includes(q) || manager.includes(q);
+    });
+  }, [picks, allPicksQuery, allPicksPos]);
+
+  const allPicksSuggestions = useMemo(() => {
+    const q = allPicksQuery.trim().toLowerCase();
+    if (!q) return [];
+
+    const set = new Set();
+
+    for (const p of picks || []) {
+      const player = String(p.playerName || "");
+      const manager = String(p.displayName || "");
+
+      if (player.toLowerCase().includes(q)) set.add(player);
+      if (manager.toLowerCase().includes(q)) set.add(manager);
+      if (set.size >= 10) break; // cap suggestions
+    }
+
+    return Array.from(set).slice(0, 10);
+  }, [picks, allPicksQuery]);
+
+
   // Put this ABOVE your availablePlayers useMemo
   function normalizeDraftPos(pos) {
     const p = String(pos || "").toUpperCase();
@@ -511,20 +582,30 @@ export default function DraftWithPresence() {
   }));
 
   const availablePlayers = useMemo(() => {
-    const q = searchState.trim().toLowerCase();
+  const q = searchState.trim().toLowerCase();
 
-    // show nothing until user types
-    if (!q) return [];
+  // show nothing until user types
+  if (!q) return [];
 
-    return ALL_PLAYERS
-      .filter((p) => {
-        if (pickedIds.has(p.id)) return false;
-        if (posFilterState !== "ALL" && p.position !== posFilterState) return false;
-        if (!p.name.toLowerCase().includes(q)) return false;
-        return true;
-      })
-      .slice(0, 10);
-  }, [ALL_PLAYERS, posFilterState, searchState, pickedIds]);
+  return ALL_PLAYERS
+    .filter((p) => {
+      if (posFilterState !== "ALL" && p.position !== posFilterState) return false;
+      if (!p.name.toLowerCase().includes(q)) return false;
+      return true;
+    })
+    // push drafted players to the bottom so undrafted show first
+    .sort((a, b) => {
+      const ad = pickedIds.has(a.id) ? 1 : 0;
+      const bd = pickedIds.has(b.id) ? 1 : 0;
+      return ad - bd; 
+    })
+    .slice(0, 10)
+    .map((p) => ({
+      ...p,
+      isDrafted: pickedIds.has(p.id),
+    }));
+}, [ALL_PLAYERS, posFilterState, searchState, pickedIds]);
+
 
   const canPickNow = room?.started && currentPicker?.uid === user?.uid;
 
@@ -1005,20 +1086,70 @@ export default function DraftWithPresence() {
                       })}
                   </ol>
                 </div>
+                
+                <div className="allPicksHeaderRow">
+                  <div className="font-semibold">All Picks</div>
 
-                <div className="font-semibold mt-4 mb-2">All Picks</div>
+                  <div className="allPicksControls">
+                    <select
+                      className="allPicksSelect"
+                      value={allPicksPos}
+                      onChange={(e) => setAllPicksPos(e.target.value)}
+                    >
+                      <option value="ALL">All</option>
+                      <option value="ATT">ATT</option>
+                      <option value="MID">MID</option>
+                      <option value="DEF">DEF</option>
+                      <option value="GK">GK</option>
+                    </select>
+
+                    <input
+                      className="allPicksSearch"
+                      placeholder="Search player or manager…"
+                      value={allPicksQuery}
+                      onChange={(e) => setAllPicksQuery(e.target.value)}
+                      
+                    />
+
+              
+                  </div>
+                </div>
+
                 <ol className="text-sm space-y-1 max-h-[40vh] overflow-auto">
-                  {picks.map((p) => (
-                    <li key={p.playerId} className="border rounded px-2 py-1 flex items-center justify-between">
-                      <span>
-                        <b>#{p.turn}</b> — {p.displayName} picked <b>{p.playerName}</b>{" "}
-                        <span className="opacity-70">({p.position})</span>
-                      </span>
-                      <span className="opacity-70">Round {p.round}</span>
-                    </li>
-                  ))}
-                  {picks.length === 0 && <div className="opacity-60">No picks yet.</div>}
+                  {filteredPicks.map((p) => {
+                    const isMine = p.uid === user?.uid;
+
+                    return (
+                      <li
+                        key={p.playerId}
+                        className={`pickRow ${isMine ? "pickRowMine" : ""}`}
+                      >
+                        <span className="pickMain">
+                          <b>#{p.turn}</b> —{" "}
+                          <span
+                            className="pickManagerPill"
+                            style={managerPillStyle(p.uid, isMine)}
+                            title={isMine ? "Your pick" : p.displayName}
+                          >
+                            {p.displayName}
+                          </span>{" "}
+                          picked <b>{p.playerName}</b>{" "}
+                          <span className="opacity-70">({p.position})</span>
+                        </span>
+
+                        <span className="opacity-70">Round {p.round}</span>
+                      </li>
+                    );
+                  })}
+
+                  {filteredPicks.length === 0 && (
+                    <div className="opacity-60">
+                      No picks match your search/filter.
+                    </div>
+                  )}
                 </ol>
+
+                
               </div>
             </div>         
           )}
@@ -1121,14 +1252,33 @@ function PlayerPool({
         ) : (
           <>
             {availablePlayers.map((pl) => {
-              const blocked = requiredSlot && requiredSlot !== "SUB" && pl.position !== requiredSlot;
+              const drafted = !!pl.isDrafted; // <-- from your useMemo map()
+              const blocked =
+                requiredSlot && requiredSlot !== "SUB" && pl.position !== requiredSlot;
+
+              const disabled = drafted || blocked;
+
+              const title = drafted
+                ? "Already drafted"
+                : blocked
+                ? `This round requires ${requiredSlot}`
+                : "Pick";
 
               return (
-                <div key={pl.id} className="border rounded p-3 flex items-center justify-between">
+                <div
+                  key={pl.id}
+                  className={`border rounded p-3 flex items-center justify-between ${
+                    drafted ? "opacity-60" : ""
+                  }`}
+                >
                   <div>
-                    <div className="font-semibold">{pl.name}</div>
+                    <div className="font-semibold flex items-center gap-2">
+                      <span>{pl.name}</span>
 
-                    {/* ✅ C: show nationality (country) */}
+                      {/* ✅ Drafted badge */}
+                      {drafted && <span className="draftedBadge">Drafted</span>}
+                    </div>
+
                     <div className="text-xs opacity-70">
                       {pl.position}
                       {pl.nationality ? ` • ${pl.nationality}` : ""}
@@ -1139,19 +1289,23 @@ function PlayerPool({
                   <button
                     type="button"
                     className="border px-3 py-1 rounded bg-black text-white disabled:opacity-50"
-                    disabled={blocked}
-                    onClick={() => onPick(pl)}
-                    title={blocked ? `This round requires ${requiredSlot}` : "Pick"}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (disabled) return; // extra safety
+                      onPick(pl);
+                    }}
+                    title={title}
                   >
-                    Pick
+                    {drafted ? "Taken" : "Pick"}
                   </button>
                 </div>
               );
             })}
 
             {availablePlayers.length === 0 && (
-              <div className="opacity-60">No players match filters / all taken.</div>
+              <div className="opacity-60">No players match your filters.</div>
             )}
+
           </>
         )}
       </div>
@@ -1159,8 +1313,6 @@ function PlayerPool({
   );
 }
 
-
-// --- ADD THIS AT THE BOTTOM OF Draft.jsx ---
 function LeagueSelector({ roomId, room, isHost, poolCount, setSeedingPlayers }) {
   const [queryText, setQueryText] = useState("");
   const [results, setResults] = useState([]);
