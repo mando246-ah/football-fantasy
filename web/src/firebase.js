@@ -30,6 +30,7 @@ import { collection, getDocs, query, where, addDoc } from "firebase/firestore";
 import { writeBatch } from "firebase/firestore";
 import { getFunctions } from "firebase/functions";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getAnalytics , isSupported } from "firebase/analytics";
 
 //Player pool to FireStore
 export async function seedRoomPlayers(roomId, players) {
@@ -51,7 +52,6 @@ export async function seedRoomPlayers(roomId, players) {
    Firebase App Config
    =========================
 */
-
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -75,6 +75,11 @@ export const db = getFirestore(app);
 
 export const functions = getFunctions(app, "us-west2");
 
+//Analytics
+export let analytics = null;
+isSupported().then((ok) => {
+  if (ok) analytics = getAnalytics(app);
+});
 
 //User Pictures
 export async function uploadUserAvatar(uid, file) {
@@ -612,206 +617,444 @@ export async function marketSaveInterest({ roomId, choices }) {
 
 
 // Resolve the market by priority (lowest total points first)
+// Resolve the market by priority (LOWEST standings tablePoints first,
+// tie-breaker: LOWEST totalFantasyPoints).
+// If swapOut is in starting XI AND is LIVE at close -> treat as loser (skip).
 export async function marketResolve({ roomId }) {
   const user = auth.currentUser;
   if (!user) throw new Error("Not signed in");
+  if (!roomId) throw new Error("Missing roomId");
+
   const roomRef = doc(db, "rooms", roomId);
+  const marketRef = doc(db, "rooms", roomId, "market", "current");
+
   const roomSnap = await getDoc(roomRef);
-  if(!roomSnap.exists()) throw new Error("Room Not Found");
+  if (!roomSnap.exists()) throw new Error("Room Not Found");
 
   const room = roomSnap.data();
-  if(room.hostUid !== user.uid){
+  if (room.hostUid !== user.uid) {
     throw new Error(`Only host can resolve market (hostUid=${room.hostUid}, you=${user.uid})`);
   }
 
-  // We’ll read everything we need outside the TX, then confirm state+write in TX.
-  const [picksSnap, playersSnap, interestSnap] = await Promise.all([
-    getDocs(collection(db, "rooms", roomId, "picks")),
-    getDocs(collection(db, "rooms", roomId, "players")),
-    getDocs(collection(db, "rooms", roomId, "marketInterest")),
-  ]);
+  const marketSnap = await getDoc(marketRef);
+  const market = marketSnap.exists() ? marketSnap.data() : null;
 
-  // Build helper maps/sets
-  const pickedIds = new Set();
-  const picksByUser = new Map(); // uid -> pick docs (for points + swap validation)
-  picksSnap.forEach((d) => {
-    const p = d.data();
-    pickedIds.add(p.playerId);
-    const arr = picksByUser.get(p.uid) || [];
-    arr.push({ ...p, _id: d.id });
-    picksByUser.set(p.uid, arr);
-  });
+  // You can enforce this if you want:
+  // if (market?.status !== "resolving") throw new Error("Market is not resolving");
 
-  // Undrafted = players minus pickedIds
-  const allPlayers = [];
-  const byId = new Map();
+  const weekIndex = Number(room?.currentWeekIndex);
+  const weekResultsRef =
+    Number.isFinite(weekIndex) ? doc(db, "rooms", roomId, "weekResults", String(weekIndex)) : null;
+  const standingsRef = doc(db, "rooms", roomId, "standings", "current");
+
+  // Load everything outside TX
+  const [picksSnap, playersSnap, interestSnap, standingsSnap, weekResultsSnap, lineupsSnap] =
+    await Promise.all([
+      getDocs(collection(db, "rooms", roomId, "picks")),
+      getDocs(collection(db, "rooms", roomId, "players")),
+      getDocs(collection(db, "rooms", roomId, "marketInterest")),
+      getDoc(standingsRef),
+      weekResultsRef ? getDoc(weekResultsRef) : Promise.resolve(null),
+      getDocs(collection(db, "rooms", roomId, "lineups")),
+    ]);
+
+  // --- helpers ---
+  const normPos = (pos) => {
+    const p = String(pos || "").toUpperCase();
+    if (p === "FWD") return "ATT";
+    if (p === "FW") return "ATT";
+    if (p === "G") return "GK";
+    if (p === "GK" || p === "DEF" || p === "MID" || p === "ATT") return p;
+    return "MID";
+  };
+
+  const STARTER_RULES = {
+    GK: { min: 1, max: 1 },
+    DEF: { min: 3, max: 5 },
+    MID: { min: 3, max: 5 },
+    ATT: { min: 1, max: 3 },
+  };
+  const STARTING_CAP = 11;
+
+  // players pool
+  const byId = new Map(); // playerId -> player meta
   playersSnap.forEach((d) => {
     const pl = d.data();
-    allPlayers.push(pl);
-    byId.set(String(pl.id), pl);
-  });
-  const available = new Set(allPlayers.map((pl) => String(pl.id)).filter(id => !pickedIds.has(id)));
-
-  // Aggregate team points (placeholder: sum pick.pts || 0)
-  const teamPoints = [];
-  picksByUser.forEach((arr, uid) => {
-    const total = arr.reduce((sum, p) => sum + (Number(p.pts) || 0), 0);
-    teamPoints.push({ uid, points: total });
+    byId.set(String(pl.id), { ...pl, id: String(pl.id) });
   });
 
-  // Ensure users without picks still in list (points=0)
-  interestSnap.forEach((d) => {
-    const uid = d.id;
-    if (!teamPoints.find(t => t.uid === uid)) teamPoints.push({ uid, points: 0 });
+  // picks
+  const pickedIds = new Set();
+  const picksByUser = new Map(); // uid -> array of picks
+  const pickDocIdByUid = new Map(); // uid -> Map(playerId -> pickDocId)
+  picksSnap.forEach((d) => {
+    const p = d.data();
+    const uid = p.uid;
+    const pid = String(p.playerId);
+
+    pickedIds.add(pid);
+
+    const arr = picksByUser.get(uid) || [];
+    arr.push({ ...p, _id: d.id, playerId: pid });
+    picksByUser.set(uid, arr);
+
+    const inner = pickDocIdByUid.get(uid) || new Map();
+    inner.set(pid, d.id);
+    pickDocIdByUid.set(uid, inner);
   });
 
-  // Load interest
+  // Available = undrafted only
+  const available = new Set(
+    [...byId.keys()].filter((id) => !pickedIds.has(String(id)))
+  );
+
+  // interests
   const interests = interestSnap.docs.map((d) => ({ uid: d.id, ...(d.data() || {}) }));
+  const interestByUid = new Map(interests.map((i) => [i.uid, i]));
 
-  // Priority: ascending points (lowest first)
-  teamPoints.sort((a, b) => a.points - b.points);
-  const priorityUids = teamPoints.map(t => t.uid);
+  // standings map for priority
+  const standingsData = standingsSnap.exists() ? standingsSnap.data() : null;
+  const standingsRows = Array.isArray(standingsData?.standings) ? standingsData.standings : [];
+  const standingsByUid = new Map(
+    standingsRows.map((r) => [
+      String(r.userId),
+      {
+        tablePoints: Number(r.tablePoints ?? 0),
+        totalFantasyPoints: Number(r.totalFantasyPoints ?? 0),
+      },
+    ])
+  );
 
-  // Prepare result records we’ll commit
+  // LIVE map (per user, per playerKey) from weekResults breakdown
+  const wr = weekResultsSnap && weekResultsSnap.exists ? (weekResultsSnap.exists() ? weekResultsSnap.data() : null) : null;
+  const breakdownByUserId = wr?.breakdownByUserId || {};
+  const liveSetByUid = new Map(); // uid -> Set(playerKey)
+  for (const [uid, bd] of Object.entries(breakdownByUserId)) {
+    const perPlayer = bd?.perPlayer || {};
+    const liveSet = new Set();
+    for (const [playerKey, entry] of Object.entries(perPlayer)) {
+      const stats = typeof entry === "object" ? entry?.stats : null;
+      if (stats?.isLive) liveSet.add(String(playerKey));
+    }
+    liveSetByUid.set(String(uid), liveSet);
+  }
+
+  // lineups map
+  const lineupByUid = new Map();
+  lineupsSnap.forEach((d) => {
+    lineupByUid.set(String(d.id), d.data() || {});
+  });
+
+  const isSwapOutStarterAndLive = (uid, swapOutId) => {
+    const lineup = lineupByUid.get(String(uid));
+    const starters = new Set(Array.isArray(lineup?.starters) ? lineup.starters.map(String) : []);
+    if (!starters.has(String(swapOutId))) return false;
+    const liveSet = liveSetByUid.get(String(uid));
+    return !!liveSet?.has(String(swapOutId));
+  };
+
+  // Priority list = all users who submitted interest
+  const uids = interests.map((i) => String(i.uid));
+
+  uids.sort((a, b) => {
+    const sa = standingsByUid.get(a) || { tablePoints: 0, totalFantasyPoints: 0 };
+    const sb = standingsByUid.get(b) || { tablePoints: 0, totalFantasyPoints: 0 };
+
+    // LOWER standings points first (comeback factor)
+    if (sa.tablePoints !== sb.tablePoints) return sa.tablePoints - sb.tablePoints;
+
+    // Tie-breaker: LOWER total fantasy points first
+    if (sa.totalFantasyPoints !== sb.totalFantasyPoints) return sa.totalFantasyPoints - sb.totalFantasyPoints;
+
+    // Last tie-breaker: earlier submission wins (updatedAt)
+    const ia = interestByUid.get(a);
+    const ib = interestByUid.get(b);
+    const ta = ia?.updatedAt?.toMillis ? ia.updatedAt.toMillis() : Infinity;
+    const tb = ib?.updatedAt?.toMillis ? ib.updatedAt.toMillis() : Infinity;
+    if (ta !== tb) return ta - tb;
+
+    // Stable final tie-breaker
+    return String(a).localeCompare(String(b));
+  });
+
+  // Helper: build a legal XI from roster, preferring current starters
+  function buildLegalXI(rosterKeys, preferredKeys) {
+    const rosterSet = new Set(rosterKeys.map(String));
+    const pref = (preferredKeys || []).map(String).filter((k) => rosterSet.has(k));
+
+    const rest = rosterKeys.map(String).filter((k) => !pref.includes(k));
+
+    const posOf = (k) => normPos(byId.get(String(k))?.position);
+
+    let xi = [...pref];
+
+    // Trim over 11 (we will re-fill correctly)
+    if (xi.length > STARTING_CAP) xi = xi.slice(0, STARTING_CAP);
+
+    const count = () => {
+      const c = { GK: 0, DEF: 0, MID: 0, ATT: 0 };
+      for (const k of xi) c[posOf(k)] = (c[posOf(k)] || 0) + 1;
+      return c;
+    };
+
+    const removeOne = (pos) => {
+      for (let i = xi.length - 1; i >= 0; i--) {
+        if (posOf(xi[i]) === pos) {
+          xi.splice(i, 1);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const takeCandidate = (pos) => {
+      const idx = rest.findIndex((k) => posOf(k) === pos);
+      if (idx === -1) return null;
+      const k = rest[idx];
+      rest.splice(idx, 1);
+      return k;
+    };
+
+    // Enforce max caps
+    let c = count();
+    for (const pos of ["GK", "DEF", "MID", "ATT"]) {
+      const max = STARTER_RULES[pos].max;
+      while ((c[pos] || 0) > max) {
+        if (!removeOne(pos)) break;
+        c = count();
+      }
+    }
+
+    // Ensure mins
+    c = count();
+    for (const pos of ["GK", "DEF", "MID", "ATT"]) {
+      const min = STARTER_RULES[pos].min;
+      while ((c[pos] || 0) < min && xi.length < STARTING_CAP) {
+        const k = takeCandidate(pos);
+        if (!k) break;
+        xi.push(k);
+        c = count();
+      }
+    }
+
+    // Fill remaining slots up to 11 respecting max
+    const fillOrder = ["DEF", "MID", "ATT", "DEF", "MID", "ATT"];
+    while (xi.length < STARTING_CAP) {
+      let added = false;
+      c = count();
+
+      for (const pos of fillOrder) {
+        if ((c[pos] || 0) >= STARTER_RULES[pos].max) continue;
+        const k = takeCandidate(pos);
+        if (k) {
+          xi.push(k);
+          added = true;
+          break;
+        }
+      }
+
+      // If nothing fits caps, just add any leftover to reach 11
+      if (!added) {
+        const k = rest.shift();
+        if (!k) break;
+        xi.push(k);
+      }
+    }
+
+    // If still not exactly 11, force to first 11 of roster
+    if (xi.length !== STARTING_CAP) {
+      return rosterKeys.slice(0, STARTING_CAP).map(String);
+    }
+
+    return xi.map(String);
+  }
+
+  // Results + lineup update plans
   const results = [];
+  const lineupPlanByUid = new Map(); // uid -> {starters, startingXI}
 
   const members = Array.isArray(room.members) ? room.members : [];
-  const nameByUid = new Map(members.map(m => [m.uid, m.displayName]));
+  const nameByUid = new Map(members.map((m) => [String(m.uid), m.displayName]));
 
+  // Apply in priority order
+  for (const uid of uids) {
+    const interest = interestByUid.get(uid);
+    const displayName = nameByUid.get(uid) || interest?.displayName || uid;
+    const choices = Array.isArray(interest?.choices) ? interest.choices.slice(0, 2) : [];
+    if (!choices.length) continue;
 
-  // Apply choices in priority order; users can get up to two swaps
-  // Apply choicos in priority order; users can get up to two swaps
-for (const  uid of priorityUids) {
-  const interest = interests.find(i => i.uid === uid);
-  if (!interest?.choices?.length) continue;
+    const myPickDocMap = pickDocIdByUid.get(uid) || new Map();
 
-  const displayName = nameByUid.get(uid) || interest.displayName || uid;
+    // Build a roster snapshot for lineup planning
+    const baseRoster = (picksByUser.get(uid) || []).map((p) => String(p.playerId));
+    const swapsForUser = [];
 
-  // We’ll check the user’s current picks for swapOut validity
-  const myPicks = picksByUser.get(uid) || [];
-  const myPickByPlayerId = new Map(myPicks.map(p => [String(p.playerId), p]));
+    for (const choice of choices) {
+      const wantId = String(choice?.wantId || "");
+      const swapOutId = String(choice?.swapOutId || "");
 
-  for (const choice of interest.choices) {
-    const wantId = String(choice.wantId || "");
-    const swapOutId = String(choice.swapOutId || "");
+      if (!wantId || !swapOutId) {
+        results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "MISSING_FIELDS" });
+        continue;
+      }
+      if (wantId === swapOutId) {
+        results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "SAME_PLAYER" });
+        continue;
+      }
 
-    if (!wantId || !swapOutId) {
-      results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "MISSING_FIELDS" });
-      continue;
+      // Want must still be undrafted
+      if (!available.has(wantId)) {
+        results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "WANT_NOT_AVAILABLE" });
+        continue;
+      }
+
+      // swapOut must still be owned
+      const pickDocId = myPickDocMap.get(swapOutId);
+      if (!pickDocId) {
+        results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "SWAPOUT_NOT_OWNED" });
+        continue;
+      }
+
+      // Rule #5: if swapOut is starter AND LIVE => loser (no changes)
+      if (isSwapOutStarterAndLive(uid, swapOutId)) {
+        results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "SWAPOUT_STARTER_LIVE" });
+        continue;
+      }
+
+      const wantPlayer = byId.get(wantId);
+      if (!wantPlayer) {
+        results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "WANT_NOT_IN_POOL" });
+        continue;
+      }
+
+      // Winner consumes wantId
+      available.delete(wantId);
+
+      swapsForUser.push({ swapOutId, gotId: wantId });
+
+      results.push({
+        uid,
+        displayName,
+        ok: true,
+        pickDocId,
+        gotId: wantId,
+        gotName: wantPlayer.name,
+        releasedId: swapOutId,
+        releasedName: byId.get(swapOutId)?.name || swapOutId,
+      });
     }
 
-    if (wantId === swapOutId) {
-      results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "SAME_PLAYER" });
-      continue;
+    // --- lineup auto adjust after successful swaps (only if any ok) ---
+    if (swapsForUser.length) {
+      // Simulate final roster ids
+      let roster = [...baseRoster];
+      for (const s of swapsForUser) {
+        const idx = roster.findIndex((k) => String(k) === String(s.swapOutId));
+        if (idx >= 0) roster[idx] = String(s.gotId);
+      }
+
+      // Current starters (fallback: first 11 of roster)
+      const lineup = lineupByUid.get(uid) || {};
+      const currentStartersRaw = Array.isArray(lineup?.starters) ? lineup.starters.map(String) : [];
+      let starters = currentStartersRaw.length ? currentStartersRaw : roster.slice(0, STARTING_CAP);
+
+      // Replace any swapped-out starter ids with gotId
+      for (const s of swapsForUser) {
+        starters = starters.map((k) => (String(k) === String(s.swapOutId) ? String(s.gotId) : String(k)));
+      }
+
+      // Remove any starters not in roster (safety)
+      const rosterSet = new Set(roster.map(String));
+      starters = starters.filter((k) => rosterSet.has(String(k)));
+
+      // Fill up to 11 if needed
+      for (const k of roster) {
+        if (starters.length >= STARTING_CAP) break;
+        if (!starters.includes(String(k))) starters.push(String(k));
+      }
+
+      // Build legal XI (auto-fix)
+      const fixed = buildLegalXI(roster, starters);
+
+      // Build startingXI objects
+      const startingXI = fixed.map((k) => {
+        const meta = byId.get(String(k)) || {};
+        return {
+          id: String(k),
+          name: meta.name || "",
+          position: normPos(meta.position),
+          teamId: meta.teamId ?? meta.apiTeamId ?? null,
+          apiPlayerId: meta.apiPlayerId ?? null,
+        };
+      });
+
+      lineupPlanByUid.set(uid, {
+        starters: fixed,
+        startingXI,
+      });
     }
-
-    // Want must be available (waiver wire rule)
-    if (!available.has(wantId)) {
-      results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "WANT_NOT_AVAILABLE" });
-      continue;
-    }
-
-    // swapOut must be currently owned by user
-    const ownedPick = myPickByPlayerId.get(swapOutId);
-    if (!ownedPick) {
-      results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "SWAPOUT_NOT_OWNED" });
-      continue;
-    }
-
-    const wantPlayer = byId.get(wantId);
-    if (!wantPlayer) {
-      results.push({ uid, displayName, ok: false, wantId, swapOutId, reason: "WANT_NOT_IN_POOL" });
-      continue;
-    }
-
-    // "Apply" swap locally
-    available.delete(wantId);          // consumed
-    myPickByPlayerId.delete(swapOutId); // released
-
-    results.push({
-      uid,
-      displayName,
-      ok: true,
-      gotId: wantId,
-      gotName: wantPlayer.name,
-      releasedId: swapOutId,
-      releasedName: ownedPick.playerName || swapOutId,
-    });
-
-    // Released player becomes available for later processing
-    available.add(swapOutId);
   }
-}
 
-
-  // Commit: status -> resolving -> resolved, write picks & results atomically
+  // --- Commit atomically ---
   await runTransaction(db, async (tx) => {
     const rs = await tx.get(roomRef);
     if (!rs.exists()) throw new Error("Room not found");
-    const room = rs.data();
-    const m = room.market || {};
-    if (m.status !== "resolving" && m.status !== "open") {
-      // Allow host to force resolve if stuck open
-      // Otherwise require resolving/close
-    }
+    const roomNow = rs.data();
+    if (roomNow.hostUid !== user.uid) throw new Error("Only host can resolve");
 
-    // For each result: delete released pick, add new pick for gotId
+    // Write results and apply successful swaps
     for (const r of results) {
-    // ✅ Always log the result for everyone to see
-    const resDoc = doc(collection(db, "rooms", roomId, "marketResults"));
-    tx.set(resDoc, { ...r, resolvedAt: serverTimestamp() });
+      const resDoc = doc(collection(db, "rooms", roomId, "marketResults"));
+      tx.set(resDoc, { ...r, resolvedAt: serverTimestamp() });
 
-    // ✅ Only successful results should change picks
-    if (!r.ok) continue;
+      if (!r.ok) continue;
 
-    // Find the pick doc that is being swapped out
-    const pickToUpdate = picksSnap.docs.find(d => {
-      const p = d.data();
-      return (
-        p.uid === r.uid &&
-        String(p.playerId) === String(r.releasedId)
-      );
-    });
-
-    if (!pickToUpdate) {
-      // still recorded as a result already; just skip applying
-      continue;
+      const meta = byId.get(String(r.gotId)) || {};
+      tx.update(doc(db, "rooms", roomId, "picks", r.pickDocId), {
+        playerId: String(r.gotId),
+        playerName: String(r.gotName || meta.name || r.gotId),
+        position: normPos(meta.position),
+        ...(meta.apiPlayerId != null ? { apiPlayerId: String(meta.apiPlayerId) } : {}),
+        ...(meta.apiTeamId != null ? { apiTeamId: String(meta.apiTeamId) } : {}),
+        ...(meta.teamName ? { teamName: String(meta.teamName) } : {}),
+        ...(meta.nationality ? { nationality: String(meta.nationality) } : {}),
+        updatedAt: serverTimestamp(),
+      });
     }
 
-    // Update the EXISTING pick doc in place
-    tx.update(doc(db, "rooms", roomId, "picks", pickToUpdate.id), {
-      playerId: r.gotId,
-      playerName: r.gotName,
-      position: byId.get(r.gotId)?.position || "SUB",
-      updatedAt: serverTimestamp(),
-    });
-  }
-    tx.update(roomRef, {
-      market: { ...m, isOpen: false, status: "resolved", closeAt: Date.now() },
-      updatedAt: serverTimestamp(),
-    });
+    // Apply lineup auto-fix plans
+    for (const [uid, plan] of lineupPlanByUid.entries()) {
+      tx.set(
+        doc(db, "rooms", roomId, "lineups", uid),
+        {
+          uid,
+          starters: plan.starters,
+          startingXI: plan.startingXI,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
+    // Mark market resolved (THIS is what Marketplace.jsx listens to)
+    if (marketSnap.exists()) {
+      tx.set(
+        marketRef,
+        {
+          ...(market || {}),
+          status: "resolved",
+          resolvedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } else {
+      tx.set(marketRef, { status: "resolved", resolvedAt: serverTimestamp() }, { merge: true });
+    }
   });
 
-  const okCount = results.filter(r => r.ok).length;
-  return { ok: true, resultsCount: okCount};
+  const okCount = results.filter((r) => r.ok).length;
+  return { ok: true, resultsCount: okCount };
 }
-
-// Live watch of market object
-/*export function watchMarket(roomId, cb) {
-  const ref = doc(db, "rooms", roomId);
-  return onSnapshot(
-    ref,
-    (s) => {
-      const data = s.exists() ? s.data() : null;
-      cb(data?.market || null, data);
-    },
-    (err) => {
-      console.error("watchMarket snapshot error:", err);
-      cb(null, null); // fail gracefully so UI doesn't explode
-    }
-  );
-} */
-
 
 
 /* =========================

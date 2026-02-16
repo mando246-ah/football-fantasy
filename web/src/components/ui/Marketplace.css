@@ -368,3 +368,38 @@
     border: 2px solid rgba(0,0,0,0.25);
   }
 }
+
+.marketResultTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.marketResultTag{
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.25);
+}
+
+.marketResultTagOk{
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: rgba(220, 252, 231, 0.95);
+}
+
+.marketResultTagFail{
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: rgba(254, 226, 226, 0.95);
+}
+
+.marketResultReason{
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.75;
+}

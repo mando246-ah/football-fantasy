@@ -18,7 +18,14 @@ import "./DraftSummary.css";
 
 
 const DEFAULT_DRAFT_PLAN = ["ATT", "ATT", "MID", "MID", "DEF", "DEF", "GK", "SUB", "SUB"];
-const STARTING_CAP = 11;   
+const STARTING_CAP = 11;
+const STARTER_RULES = {
+  GK:  { min: 1, max: 1 },
+  DEF: { min: 3, max: 5 },
+  MID: { min: 3, max: 5 },
+  ATT: { min: 1, max: 3 },
+};
+
 
 function displayNameOf(m) {
   return m?.displayName || m?.uid || "User";
@@ -240,7 +247,7 @@ export default function DraftSummary() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button
+            {/*<button
             type="button"
               className="px-3 py-2 rounded border"
               onClick={() => {
@@ -261,7 +268,7 @@ export default function DraftSummary() {
               disabled={!roomId}
             >
               Copy Link
-            </button>
+            </button> */}
             <select
               className="px-2 py-2 rounded border"
               value={sortMode}
@@ -301,6 +308,52 @@ export default function DraftSummary() {
               <div className="text-sm text-gray-500">No members yet.</div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Rules / Info panel */}
+      <div className="dsInfoPanel">
+        <div className="dsInfoTop">
+          <div>
+            <div className="dsInfoTitle">Rules</div>
+            <div className="dsInfoSub">
+              
+            </div>
+          </div>
+
+          {/* optional placeholder: later you can add a button/menu here */}
+          <div className="dsInfoRightHint"></div>
+        </div>
+
+        <div className="dsInfoGrid">
+          <div className="dsInfoBlock">
+            <div className="dsInfoBlockTitle">Starting XI formation</div>
+            <div className="dsRulePills">
+              <span className="dsRulePill">GK: 1</span>
+              <span className="dsRulePill">DEF: 3–5</span>
+              <span className="dsRulePill">MID: 3–5</span>
+              <span className="dsRulePill">ATT: 1–3</span>
+            </div>
+            <div className="dsInfoNote">
+              Total starters must be 11. Bench does not score.
+            </div>
+          </div>
+
+          <div className="dsInfoBlock">
+            <div className="dsInfoBlockTitle">Substitution lock</div>
+            <div className="dsInfoNote">
+              Subs are disabled if the player you’re subbing <b>IN</b> is <b>LIVE</b>, or the starter
+              you’re subbing <b>OUT</b> is <b>LIVE</b>.
+            </div>
+            <div className="dsInfoNote">
+              
+            </div>
+          </div>
+        </div>
+
+        {/* Reserved space for future widgets */}
+        <div className="dsInfoFooter">
+          <span className="dsInfoFooterHint"></span>
         </div>
       </div>
 
@@ -404,6 +457,12 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
   );
 
   const allKeys = useMemo(() => orderedPicks.map(keyOf), [orderedPicks]);
+  const pickByKey = useMemo(() => {
+    const m = new Map();
+    for (const p of orderedPicks) m.set(keyOf(p), p);
+    return m;
+  }, [orderedPicks]);
+
 
   const [lineupDoc, setLineupDoc] = useState(null);
   const [pendingIn, setPendingIn] = useState(null); // bench player picked to sub in
@@ -415,29 +474,139 @@ function ManagerRosterCard({ manager, picks, totalRounds, photoURL, teamName, ro
     return onSnapshot(ref, (snap) => setLineupDoc(snap.exists() ? snap.data() : null));
   }, [lineupRoomId, manager?.uid]);
 
+  //Helpers for starters useMemo
+  // --- Starter formation rules (GK 1, DEF 3–5, MID 3–5, ATT 1–3) ---
+  const posOfKey = (k) => {
+    const p = pickByKey.get(k);
+    const raw = (p?.position || "MID").toUpperCase();
+    return STARTER_RULES[raw] ? raw : "MID";
+  };
+
+  const countByPos = (keys) => {
+    const counts = { GK: 0, DEF: 0, MID: 0, ATT: 0 };
+    for (const k of keys || []) {
+      const pos = posOfKey(k);
+      counts[pos] = (counts[pos] || 0) + 1;
+    }
+    return counts;
+  };
+
+  const validateStarters = (keys) => {
+    const cleanKeys = (keys || []).slice(0, STARTING_CAP);
+    const counts = countByPos(cleanKeys);
+
+    // Allow partial XI while drafting (only enforce when XI is full)
+    if (cleanKeys.length < STARTING_CAP) return { ok: true, counts, errors: [] };
+
+    const errors = [];
+    for (const [pos, rule] of Object.entries(STARTER_RULES)) {
+      const n = counts[pos] || 0;
+      if (rule.min != null && n < rule.min) errors.push(`${pos}: need at least ${rule.min}`);
+      if (rule.max != null && n > rule.max) errors.push(`${pos}: max ${rule.max}`);
+    }
+    return { ok: errors.length === 0, counts, errors };
+  };
+
+  const buildDefaultXI = (keys) => {
+    const byPos = { GK: [], DEF: [], MID: [], ATT: [] };
+    for (const k of keys || []) {
+      const pos = posOfKey(k);
+      if (byPos[pos]) byPos[pos].push(k);
+    }
+
+    const out = [];
+    const take = (pos, n) => {
+      const arr = byPos[pos] || [];
+      for (const k of arr) {
+        if (out.length >= STARTING_CAP) break;
+        if (out.includes(k)) continue;
+        out.push(k);
+        if (out.filter((x) => posOfKey(x) === pos).length >= n) break;
+      }
+    };
+
+    // meet mins first
+    take("GK",  STARTER_RULES.GK.min);
+    take("DEF", STARTER_RULES.DEF.min);
+    take("MID", STARTER_RULES.MID.min);
+    take("ATT", STARTER_RULES.ATT.min);
+
+    // fill remaining, respecting max
+    const counts = countByPos(out);
+    for (const k of keys || []) {
+      if (out.length >= STARTING_CAP) break;
+      if (out.includes(k)) continue;
+      const pos = posOfKey(k);
+      const max = STARTER_RULES[pos]?.max ?? Infinity;
+      if ((counts[pos] || 0) >= max) continue;
+      out.push(k);
+      counts[pos] = (counts[pos] || 0) + 1;
+    }
+
+    return out.slice(0, STARTING_CAP);
+  };
+
   const starters = useMemo(() => {
     const saved = Array.isArray(lineupDoc?.starters) ? lineupDoc.starters : null;
-    const base = saved && saved.length ? saved : allKeys.slice(0, STARTING_CAP);
+    const base = saved && saved.length ? saved : buildDefaultXI(allKeys);
 
     const set = new Set(allKeys);
     return base.filter((k) => set.has(k)).slice(0, STARTING_CAP);
-  }, [lineupDoc, allKeys]);
+  }, [lineupDoc, allKeys, pickByKey]);
+
 
   const benchKeys = useMemo(() => {
     const s = new Set(starters);
     return allKeys.filter((k) => !s.has(k));
   }, [allKeys, starters]);
 
-  const pickByKey = useMemo(() => {
-    const m = new Map();
-    for (const p of orderedPicks) m.set(keyOf(p), p);
-    return m;
-  }, [orderedPicks]);
+  // Build a quick lookup of LIVE players returned by getUserLockStatus
+  const liveLookup = useMemo(() => {
+    const s = new Set();
+    (livePlayers || []).forEach((lp) => {
+      if (!lp) return;
+
+      // try multiple possible shapes coming back from the function
+      if (lp.apiPlayerId != null) s.add(`api:${String(lp.apiPlayerId)}`);
+      if (lp.playerId != null) s.add(`pid:${String(lp.playerId)}`);
+      if (lp.id != null) s.add(`pid:${String(lp.id)}`);
+      if (lp.name) s.add(`name:${String(lp.name).toLowerCase()}`);
+    });
+    return s;
+  }, [livePlayers]);
+
+  const isPickLive = (p) => {
+    if (!p) return false;
+
+    const api = p.apiPlayerId ?? p.api_player_id ?? p.apiPlayerID;
+    if (api != null && liveLookup.has(`api:${String(api)}`)) return true;
+
+    const pid = p.playerId ?? p.id;
+    if (pid != null && liveLookup.has(`pid:${String(pid)}`)) return true;
+
+    const nm = (p.playerName || p.name || "").toLowerCase();
+    if (nm && liveLookup.has(`name:${nm}`)) return true;
+
+    return false;
+  };
+
+  // If you selected a bench player already, track whether THEY are live
+  const pendingPick = pendingIn ? pickByKey.get(pendingIn) : null;
+  const pendingIsLive = pendingPick ? isPickLive(pendingPick) : false;
+
 
 async function saveStarters(next) {
   if (!isMe || lockedNow) return;
 
   const clean = (next || []).slice(0, STARTING_CAP);
+
+  const v = validateStarters(clean);
+  if (!v.ok) {
+    alert(
+      `Invalid starting XI (Rules: GK 1, DEF 3–5, MID 3–5, ATT 1–3)\n\n${v.errors.join("\n")}`
+    );
+    return;
+  }
   
   const startingXI = clean.map((k) => {
     const p = pickByKey.get(k);
@@ -488,9 +657,15 @@ async function saveStarters(next) {
   function onSubInClick(benchKey) {
     if (!isMe || lockedNow) return;
 
+    const benchPick = pickByKey.get(benchKey);
+    if (isPickLive(benchPick)) {
+      alert("You can’t SUB IN a player that is LIVE.");
+      return;
+    }
+
     // tap again to cancel
     if (pendingIn === benchKey) {
-      setPendingIn(null);
+      setPendingIn(null);  
       return;
     }
 
@@ -507,12 +682,35 @@ async function saveStarters(next) {
 
   function onStarterClick(starterKey) {
     if (!isMe || lockedNow) return;
-    if (!pendingIn) return; // user wants flow: pick SUB IN first
+    if (!pendingIn) return;
+
+    const starterPick = pickByKey.get(starterKey);
+    const benchPick = pickByKey.get(pendingIn);
+
+    if (isPickLive(starterPick)) {
+      alert("You can’t SUB OUT a starter that is LIVE.");
+      return;
+    }
+    if (isPickLive(benchPick)) {
+      alert("You can’t SUB IN a bench player that is LIVE.");
+      return;
+    }
 
     const next = starters.map((k) => (k === starterKey ? pendingIn : k));
     saveStarters(next);
     setPendingIn(null);
   }
+
+  const replaceableStarters = useMemo(() => {
+    if (!pendingIn) return null;
+    const allowed = new Set();
+    for (const starterKey of starters) {
+      const next = starters.map((k) => (k === starterKey ? pendingIn : k));
+      if (validateStarters(next).ok) allowed.add(starterKey);
+    }
+    return allowed;
+  }, [pendingIn, starters, pickByKey]);
+
 
   // Starters grouped into the same ATT/MID/DEF/GK layout
   const startersByPos = useMemo(() => {
@@ -618,10 +816,10 @@ async function saveStarters(next) {
       <div className="grid grid-cols-2 gap-2 text-sm">
         {isMe ? (
           <>
-            <StarterBlock title="ATT" list={startersByPos.ATT} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
-            <StarterBlock title="MID" list={startersByPos.MID} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
-            <StarterBlock title="DEF" list={startersByPos.DEF} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
-            <StarterBlock title="GK"  list={startersByPos.GK}  pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} />
+            <StarterBlock title="ATT" list={startersByPos.ATT} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} isLivePick={isPickLive} pendingInPickLive={pendingIsLive} replaceable={replaceableStarters}/>
+            <StarterBlock title="MID" list={startersByPos.MID} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} isLivePick={isPickLive} pendingInPickLive={pendingIsLive} replaceable={replaceableStarters}/>
+            <StarterBlock title="DEF" list={startersByPos.DEF} pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} isLivePick={isPickLive} pendingInPickLive={pendingIsLive} replaceable={replaceableStarters}/>
+            <StarterBlock title="GK"  list={startersByPos.GK}  pendingIn={!!pendingIn} locked={lockedNow} onPick={onStarterClick} keyOf={keyOf} isLivePick={isPickLive} pendingInPickLive={pendingIsLive} replaceable={replaceableStarters}/>
 
             {/* SUB section becomes Bench */}
             <div className="col-span-2">
@@ -632,6 +830,7 @@ async function saveStarters(next) {
                 locked={lockedNow}
                 onSubIn={onSubInClick}
                 keyOf={keyOf}
+                isLivePick={isPickLive}
               />
             </div>
           </>
@@ -667,25 +866,54 @@ async function saveStarters(next) {
   );
 }
 
-function StarterBlock({ title, list, pendingIn, locked, onPick, keyOf }) {
+function StarterBlock({ title, list, pendingIn, locked, onPick, keyOf, isLivePick, pendingInPickLive, replaceable }) {
   return (
     <div className="border rounded p-2">
       <div className="text-xs font-semibold mb-1">{title}</div>
       <ul className="space-y-1">
         {list.map((p) => {
           const k = keyOf(p);
+
+          const illegalByFormation = !!pendingIn && !!replaceable && !replaceable.has(k);
+
+          const disabled =
+            locked ||
+            !pendingIn ||
+            pendingInPickLive ||
+            illegalByFormation ||
+            (isLivePick?.(p) ?? false);
+
           return (
             <li
               key={p.id || `${p.uid}-${p.turn}`}
-              className={`border rounded px-2 py-1 ${
-                locked ? "opacity-60" : pendingIn ? "cursor-pointer hover:bg-slate-50" : ""
-              }`}
-              title={pendingIn && !locked ? "Tap to sub out" : undefined}
+              className={`border rounded px-2 py-1 flex items-center justify-between
+                ${locked ? "opacity-60" : ""}
+                ${
+                  pendingIn
+                    ? disabled
+                      ? "opacity-50 cursor-not-allowed"
+                      : "cursor-pointer hover:bg-slate-50"
+                    : ""
+                }`}
+              title={
+                locked
+                  ? "Lineups locked"
+                  : pendingInPickLive
+                  ? "Selected bench player is LIVE (can’t sub in)"
+                  : isLivePick?.(p)
+                  ? "This starter is LIVE (can’t sub out)"
+                  : illegalByFormation
+                  ? "Can’t sub out (formation rules)"
+                  : pendingIn
+                  ? "Tap to sub out"
+                  : undefined
+              }
               onClick={() => {
-                if (!locked && pendingIn) onPick(k);
+                if (disabled) return;
+                onPick(k);
               }}
             >
-              {p.playerName}
+              <span>{p.playerName}</span>
             </li>
           );
         })}
@@ -695,7 +923,7 @@ function StarterBlock({ title, list, pendingIn, locked, onPick, keyOf }) {
   );
 }
 
-function BenchBlock({ title, list, pendingKey, locked, onSubIn, keyOf }) {
+function BenchBlock({ title, list, pendingKey, locked, onSubIn, keyOf, isLivePick }) {
   return (
     <div className="border rounded p-2">
       <div className="text-xs font-semibold mb-1">{title} <span className="opacity-60">(Bench)</span></div>
@@ -703,6 +931,7 @@ function BenchBlock({ title, list, pendingKey, locked, onSubIn, keyOf }) {
         {list.map((p) => {
           const k = keyOf(p);
           const selected = pendingKey === k;
+          const live = !!isLivePick?.(p);
           return (
             <li
               key={p.id || `${p.uid}-${p.turn}`}
@@ -712,13 +941,24 @@ function BenchBlock({ title, list, pendingKey, locked, onSubIn, keyOf }) {
             >
               <span>
                 {p.playerName} <span className="opacity-60 text-xs">({p.position})</span>
+                {live && (
+                  <span className="ml-2 text-[10px] font-bold px-2 py-[2px] rounded-full border border-red-400/40 bg-red-500/10 text-red-600">
+                    LIVE
+                  </span>
+                )}
               </span>
 
               <button
                 type="button"
                 className={`border rounded px-2 py-1 text-xs ${locked ? "opacity-50 cursor-not-allowed" : ""}`}
-                disabled={locked}
-                title={locked ? "Lineups locked while games are live" : "Move to starting lineup"}
+                disabled={locked || live}
+                title={
+                  locked
+                    ? "Lineups locked while games are live"
+                    : live
+                    ? "This player is LIVE (can’t sub in)"
+                    : "Move to starting lineup"
+                }
                 onClick={() => onSubIn(k)}
               >
                 SUB IN

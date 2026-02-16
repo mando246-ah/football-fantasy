@@ -100,3 +100,110 @@
   border-radius: 999px;
   border: 2px solid rgba(0,0,0,0.30);
 }
+
+
+/* ===== Rules / Info panel (match roster cards) ===== */
+.vrPage .dsInfoPanel{
+  width: 100%;
+  border-radius: 16px; /* matches rounded-2xl */
+  border: 1px solid var(--ff-border, rgba(255,255,255,0.14));
+  background: var(--ff-surface, rgba(255,255,255,0.06));
+  color: var(--ff-text, rgba(255,255,255,0.92));
+  backdrop-filter: blur(12px);
+  box-shadow: 0 18px 45px rgba(0,0,0,0.45); /* matches .shadow-sm override */
+  padding: 14px;
+  margin: 14px 0;
+}
+
+.vrPage .dsInfoTop{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.vrPage .dsInfoTitle{
+  font-weight: 800;     
+  font-size: 18px;
+  color: var(--ff-text, rgba(255,255,255,0.92));
+  letter-spacing: 0.2px;
+}
+
+.vrPage .dsInfoSub{
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ff-muted, rgba(255,255,255,0.70));
+}
+
+.vrPage .dsInfoRightHint{
+  font-size: 12px;
+  color: var(--ff-muted, rgba(255,255,255,0.70));
+  border: 1px solid var(--ff-border, rgba(255,255,255,0.14));
+  background: var(--ff-surface-2, rgba(255,255,255,0.08));
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.vrPage .dsInfoGrid{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 900px){
+  .vrPage .dsInfoGrid{ grid-template-columns: 1fr; }
+}
+
+.vrPage .dsInfoBlock{
+  border-radius: 14px;
+  border: 1px solid var(--ff-border, rgba(255,255,255,0.14));
+  background: var(--ff-surface-2, rgba(255,255,255,0.08));
+  padding: 10px;
+}
+
+.vrPage .dsInfoBlockTitle{
+  font-weight: 700;  /* like “text-xs font-semibold” vibe */
+  font-size: 12px;
+  color: var(--ff-text, rgba(255,255,255,0.92));
+  margin-bottom: 8px;
+  opacity: 0.95;
+}
+
+.vrPage .dsRulePills{
+  display:flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.vrPage .dsRulePill{
+  display:inline-flex;
+  align-items:center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--ff-border, rgba(255,255,255,0.14));
+  background: rgba(0,0,0,0.22); /* matches your input/button dark surface */
+  color: var(--ff-text, rgba(255,255,255,0.92));
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vrPage .dsInfoNote{
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ff-muted, rgba(255,255,255,0.70));
+}
+
+.vrPage .dsInfoFooter{
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ff-border, rgba(255,255,255,0.14));
+  display:flex;
+  justify-content:flex-end;
+}
+
+.vrPage .dsInfoFooterHint{
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+}

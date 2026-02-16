@@ -136,6 +136,32 @@ function managerPillStyle(uid, isMine) {
   };
 }
 
+// ----- Draft rules (Starting XI formation) -----
+// Matches the View Roster rules pills: GK:1, DEF:3–5, MID:3–5, ATT:1–3
+const STARTING_XI_FORMATION_RULES = [
+  { pos: "GK", range: "1" },
+  { pos: "DEF", range: "3–5" },
+  { pos: "MID", range: "3–5" },
+  { pos: "ATT", range: "1–3" },
+];
+
+function DraftFormationRules({ compact = false }) {
+  return (
+    <div className={`draftRulesCard ${compact ? "draftRulesCard--compact" : ""}`}>
+      <div className="draftRulesTitle">Starting XI formation</div>
+      <div className="draftRulesPills">
+        {STARTING_XI_FORMATION_RULES.map((r) => (
+          <span key={r.pos} className="draftRulePill">
+            {r.pos}: {r.range}
+          </span>
+        ))}
+      </div>
+      {!compact && <div className="draftRulesNote">Only the starting XI scores.</div>}
+    </div>
+  );
+}
+
+
 
 // Returns next occurrence of a weekday as YYYY-MM-DD in a given IANA timezone.
 // targetDow: 0=Sun ... 6=Sat
@@ -979,7 +1005,7 @@ export default function DraftWithPresence() {
                 <div className="text-sm opacity-70">
                   Round: <b>{Math.floor((room.turnIndex ?? 0) / (room.members?.length || 1)) + 1}</b> / {room.totalRounds ?? DRAFT_SIZE_LEAGUE}
                 </div>
-                <div className="mt-2 text-sm">Required slot: <b>{requiredSlot || "-"}</b></div>
+                <DraftFormationRules />
                 <div className="draftTurnBanner">
                   <div className="draftTurnMain">
                     <Avatar className="draftTurnAvatar">
@@ -1241,10 +1267,7 @@ function PlayerPool({
         />
       </div>
 
-      <div className="text-xs opacity-70 mb-2">
-        Required this round: <b>{requiredSlot || "-"}</b>
-        {requiredSlot === "SUB" ? " (any position allowed)" : ""}
-      </div>
+      <DraftFormationRules compact />
 
       <div className="grid gap-2">
         {loadingPlayers ? (

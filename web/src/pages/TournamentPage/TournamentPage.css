@@ -920,7 +920,17 @@
   white-space: nowrap;       /*  keep IDLE on one line */
 }
 
-.tpLivePill.live{ color: rgba(34,211,238,0.95); }
+.tpLivePill.live{
+   color: rgb(255, 255, 255);
+   animation: pulseRed 1.5s infinite;
+   text-shadow:
+    0 0 5px #fff,   /* Inner white glow */
+    0 0 10px #ff0000, /* Red glow with increasing blur radii */
+    0 0 20px #ff0000,
+    0 0 30px #ff0000,
+    0 0 40px #ff0000,
+    0 0 50px #ff0000;
+   }
 .tpLivePill.idle{ color: rgba(255,255,255,0.75); }
 
 /* Host Tools dropdown */
@@ -1036,4 +1046,103 @@
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.tpSectionLabel{
+  margin: 10px 0 6px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.tpBenchDetails{
+  margin-top: 10px;
+}
+
+.tpBenchSummary{
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(245, 158, 11, 0.30);
+  background: linear-gradient(
+    90deg,
+    rgba(245, 158, 11, 0.14),
+    rgba(255, 255, 255, 0.03)
+  );
+}
+
+.tpBenchSummary:hover{
+  background: linear-gradient(
+    90deg,
+    rgba(245, 158, 11, 0.20),
+    rgba(255, 255, 255, 0.06)
+  );
+  border-color: rgba(245, 158, 11, 0.42);
+}
+
+.tpBenchSummary::-webkit-details-marker{ display:none; }
+
+.tpBenchLeft{
+  display:flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.tpBenchTitle{
+  font-weight: 900;
+  font-size: 13px;
+  color: rgba(251, 191, 36, 0.95);
+}
+
+.tpBenchHint{
+  font-size: 12px;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
+.tpBenchRight{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.tpBenchTotal{
+  font-weight: 900;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 158, 11, 0.30);
+  background: rgba(245, 158, 11, 0.10);
+  white-space: nowrap;
+}
+
+.tpBenchCaret{
+  display:inline-block;
+  transition: transform 160ms ease;
+  opacity: 0.9;
+}
+
+.tpBenchDetails[open] .tpBenchCaret{
+  transform: rotate(180deg);
+}
+
+.tpBenchList{
+  margin-top: 8px;
+}
+/* Optional: slightly tint bench player rows */
+.tpBenchList .tpRowWrap{
+  background: rgba(245, 158, 11, 0.05);
+  border-color: rgba(245, 158, 11, 0.18);
+}
+.tpBenchList .tpRowWrap.tpRowOpen{
+  border-color: rgba(245, 158, 11, 0.32);
 }

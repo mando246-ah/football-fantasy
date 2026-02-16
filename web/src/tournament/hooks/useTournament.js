@@ -23,7 +23,8 @@ function normalizePlayer(raw) {
     return { id: raw, name: "Unknown", position: "MID" };
   }
 
-  const id = raw.id || raw.playerId || raw.pid;
+  const id = raw.id || raw.playerId || raw.pid || raw.apiPlayerId;
+
   if (!id) return null;
 
   return {
@@ -73,6 +74,36 @@ function extractStarterIdsOrInline(lineupData) {
 
   return { inline: [], ids: [] };
 }
+
+function extractBenchIdsOrInline(lineupData) {
+  if (!lineupData) return { inline: [], ids: [] };
+
+  const candidates = [
+    lineupData.bench,
+    lineupData.subs,
+    lineupData.substitutes,
+    lineupData.benchIds,
+    lineupData.subIds,
+    lineupData.lineup?.bench,
+    lineupData.lineup?.subs,
+    lineupData.currentLineup?.bench,
+    lineupData.currentLineup?.subs,
+  ];
+
+  for (const c of candidates) {
+    if (!Array.isArray(c) || c.length === 0) continue;
+
+    if (typeof c[0] === "string" || typeof c[0] === "number") {
+      return { inline: [], ids: c.map(String) };
+    }
+
+    const inline = c.map(normalizePlayer).filter(Boolean);
+    if (inline.length) return { inline, ids: [] };
+  }
+
+  return { inline: [], ids: [] };
+}
+
 
 async function fetchUserDoc(uid) {
   const snap = await getDoc(doc(db, "users", uid));
@@ -175,9 +206,11 @@ export function useTournament(roomId) {
           const name = teamName ? `${displayName} — ${teamName}` : displayName;
           const photoURL = (profile?.photoURL || profile?.avatarUrl || profile?.photoUrl || "").trim();
 
-
           const { inline, ids } = extractStarterIdsOrInline(lineup);
+          const { inline: benchInline, ids: benchIds } = extractBenchIdsOrInline(lineup);
+
           if (ids.length) allStarterIds.push(...ids);
+          if (benchIds.length) allStarterIds.push(...benchIds);
 
           usersDraft.push({
             userId: uid,
@@ -187,6 +220,8 @@ export function useTournament(roomId) {
             photoURL,
             startersInline: inline,
             starterIds: ids,
+            benchInline,
+            benchIds,
           });
         }
 
@@ -200,14 +235,22 @@ export function useTournament(roomId) {
               : u.starterIds
                   .map((id) => playersById.get(id) || { id, name: "Unknown", position: "MID" })
                   .filter(Boolean);
+          
+          const bench =
+            u.benchInline?.length > 0
+              ? u.benchInline
+              : (u.benchIds || [])
+                  .map((id) => playersById.get(id) || { id, name: "Unknown", position: "MID" })
+                  .filter(Boolean);
 
           return {
           userId: u.userId,
-          name: u.name,               // legacy combined string
-          displayName: u.displayName, // clean display
+          name: u.name,               
+          displayName: u.displayName, 
           teamName: u.teamName,
           photoURL: u.photoURL,
           starters,
+          bench,
         };
         });
 

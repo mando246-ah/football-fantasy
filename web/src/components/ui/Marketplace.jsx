@@ -66,6 +66,24 @@ function toMillis(value) {
   return null;
 }
 
+function friendlyMarketReason(code) {
+  switch (code) {
+    case "SWAPOUT_STARTER_LIVE":
+      return "Trade not processed because the player being dropped was LIVE when the market closed.";
+    case "WANT_NOT_AVAILABLE":
+      return "Not awarded — another manager had higher priority for this player (or the player is no longer available).";
+    case "SWAPOUT_NOT_OWNED":
+      return "Not awarded — the player being dropped is no longer on the roster.";
+    case "MISSING_FIELDS":
+      return "Not awarded — incomplete request.";
+    case "SAME_PLAYER":
+      return "Not awarded — you can’t trade a player for themselves.";
+    case "WANT_NOT_IN_POOL":
+      return "Not awarded — requested player was not found.";
+    default:
+      return "Not awarded.";
+  }
+}
 
 
 function useCountdown(targetMs, isActive) {
@@ -565,7 +583,7 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
                   setSearch={label === "Choice A" ? setSearchA : setSearchB}
                   state={state}
                   setState={set}
-                  pool={players}
+                  pool={(undrafted && undrafted.length ? undrafted : players)}
                   pickedSet={pickedSet}
                   disabled={!isEditing}
                 />
@@ -619,17 +637,47 @@ export default function Marketplace({ roomId, user, isHost, players= [] }) {
               <div className="marketResultsTitle">Market Results</div>
 
               {marketResults.length === 0 ? (
-                <div className="marketResultsEmpty">No successful trades were recorded.</div>
+                <div className="marketResultsEmpty">No market results recorded yet.</div>
               ) : (
                 <div className="marketResultsList">
-                  {marketResults.map(r => (
-                    <div key={r.id} className="marketResultRow">
-                      <div className="marketResultUser">{r.displayName || r.uid}</div>
-                      <div className="marketResultSwap">
-                        Dropped <b>{r.releasedName || r.releasedId}</b> → Added <b>{r.gotName || r.gotId}</b>
+                  {marketResults.map((r) => {
+                    const who = r.displayName || r.uid;
+                    const wantName =
+                      (players || []).find((p) => String(p.id) === String(r.wantId))?.name ||
+                      (undrafted || []).find((p) => String(p.id) === String(r.wantId))?.name ||
+                      r.wantId;
+
+                    const swapOutName =
+                      (players || []).find((p) => String(p.id) === String(r.swapOutId))?.name ||
+                      (myRoster || []).find((p) => String(p.playerId) === String(r.swapOutId))?.playerName ||
+                      r.swapOutId;
+
+                    const ok = !!r.ok;
+
+                    return (
+                      <div key={r.id} className="marketResultRow">
+                        <div className="marketResultTop">
+                          <div className="marketResultUser">{who}</div>
+                          <span className={`marketResultTag ${ok ? "marketResultTagOk" : "marketResultTagFail"}`}>
+                            {ok ? "Awarded" : "Not awarded"}
+                          </span>
+                        </div>
+
+                        {ok ? (
+                          <div className="marketResultSwap">
+                            Dropped <b>{r.releasedName || r.releasedId}</b> → Added <b>{r.gotName || r.gotId}</b>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="marketResultSwap">
+                              Requested <b>{wantName || "—"}</b> for <b>{swapOutName || "—"}</b>
+                            </div>
+                            <div className="marketResultReason">{friendlyMarketReason(r.reason)}</div>
+                          </>
+                        )}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
